@@ -86,6 +86,7 @@ dependencies = [
  "moka",
  "qrcode",
  "rand",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

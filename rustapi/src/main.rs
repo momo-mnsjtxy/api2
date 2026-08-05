@@ -28,9 +28,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            "api2=info,tower_http=info,sqlx=warn".into()
-        }))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "api2=info,tower_http=info,sqlx=warn".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -84,7 +85,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/register/index", get(handlers::web::register::index))
         .route("/register/index/", get(handlers::web::register::index))
         .route("/register/index/index", get(handlers::web::register::index))
-        .route("/register/index/GtCode", any(handlers::web::register::gt_code))
+        .route(
+            "/register/index/GtCode",
+            any(handlers::web::register::gt_code),
+        )
         .route("/register/index/Email", any(handlers::web::register::email))
         .route(
             "/register/index/callback",
@@ -222,7 +226,9 @@ async fn dispatch_page(
 ) -> Response {
     match action {
         "index" => handlers::api::page::index(Query(params)).await,
-        "netease" => handlers::api::page::netease(State(state), Query(params), headers, method).await,
+        "netease" => {
+            handlers::api::page::netease(State(state), Query(params), headers, method).await
+        }
         "autograph" => {
             handlers::api::page::autograph(State(state), Query(params), headers, method).await
         }
@@ -288,10 +294,8 @@ async fn pathinfo_fallback(
             handlers::api::v2::dispatch(&action, ctx).await
         }
         ("api", "page") => dispatch_page(&action, state, query, headers, method).await,
-        ("api", "update") => {
-            api_update_action(State(state), Path(action), Query(query)).await
-        }
-        ("api", "skey") => handlers::api::skey::index(Query(query)).await,
+        ("api", "update") => api_update_action(State(state), Path(action), Query(query)).await,
+        ("api", "skey") => handlers::api::skey::index(State(state), Query(query)).await,
         ("api", "index") => handlers::api::index::index().await,
         _ => (
             axum::http::StatusCode::NOT_FOUND,
