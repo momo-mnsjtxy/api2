@@ -2,13 +2,12 @@
 
 use axum::response::Response;
 use rand::seq::SliceRandom;
-use scraper::{Html, Selector};
 use serde_json::{json, Value};
 
 use super::{
-    cache_key, err, http_json, http_post_text, http_text, int, json_with_msg, ok, proxy_bytes,
-    rand_hex_color, random_row, random_text_table, read_public_text, redirect, row_json,
-    row_string, today_key, vclone, ApiCtx,
+    between, cache_key, err, http_json, http_post_text, http_text, int, json_with_msg, ok,
+    proxy_bytes, rand_hex_color, random_row, random_text_table, read_public_text, redirect,
+    row_json, row_string, today_key, vclone, ApiCtx,
 };
 use crate::respond;
 
@@ -98,32 +97,18 @@ pub async fn today(ctx: ApiCtx) -> Response {
     let Some(html) = http_text(&ctx, "https://lishishangdejintian.51240.com/").await else {
         return err(&ctx, 400, "请求失败");
     };
-    let document = Html::parse_document(&html);
-    let li_sel = Selector::parse("#main_content > ul > li").unwrap();
-    let a_sel = Selector::parse("a").unwrap();
-    let body_sel = Selector::parse("#main_content > div.neirong").unwrap();
     let mut results = Vec::new();
-
-    for li in document.select(&li_sel).take(30) {
-        let today = li.text().collect::<Vec<_>>().join("").trim().to_string();
-        let Some(a) = li.select(&a_sel).next() else {
-            continue;
-        };
-        let title = a.text().collect::<Vec<_>>().join("").trim().to_string();
-        let href = a.value().attr("href").unwrap_or("");
+    for item in html.split("<li").skip(1).take(30) {
+        let li = item.split("</li>").next().unwrap_or(item);
+        let href = between(li, "href=\"", "\"").unwrap_or("");
+        let title = strip_tags(between(li, ">", "</a>").unwrap_or(""))
+            .trim()
+            .to_string();
+        let today = strip_tags(li).replace(&title, "").trim().to_string();
         let url = format!("https://lishishangdejintian.51240.com/{href}");
         let body = if let Some(detail) = http_text(&ctx, &url).await {
-            let detail_doc = Html::parse_document(&detail);
-            detail_doc
-                .select(&body_sel)
-                .next()
-                .map(|n| {
-                    n.text()
-                        .collect::<Vec<_>>()
-                        .join("")
-                        .replace("更多：https://www.51240.com/", "")
-                })
-                .unwrap_or_default()
+            let body_html = between(&detail, "<div class=\"neirong\">", "</div>").unwrap_or("");
+            strip_tags(body_html).replace("更多：https://www.51240.com/", "")
         } else {
             String::new()
         };
@@ -193,7 +178,7 @@ pub async fn content_image_from_list(ctx: &ApiCtx, file: &str) -> Response {
     let Some(raw) = read_public_text(ctx, file).await else {
         return err(ctx, 400, "数据文件不存在");
     };
-    let mut urls: Vec<&str> = raw
+    let urls: Vec<&str> = raw
         .lines()
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -201,7 +186,7 @@ pub async fn content_image_from_list(ctx: &ApiCtx, file: &str) -> Response {
     if urls.is_empty() {
         return err(ctx, 400, "未查询到数据");
     }
-    let url = *urls.shuffle(&mut rand::thread_rng()).first().unwrap();
+    let url = *urls.choose(&mut rand::thread_rng()).unwrap();
     match ctx.param("type") {
         Some("url") => redirect(url),
         Some("image") => proxy_bytes(ctx, url, "image/png").await,
@@ -261,4 +246,20 @@ pub(crate) async fn amap_cached(ctx: &ApiCtx, key: String, url: String, pointer:
 
 pub(crate) fn err_api() -> Value {
     json!({"code": 400, "msg": "接口错误", "api": ""})
+}
+
+fn strip_tags(input: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    for ch in input.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
 }
