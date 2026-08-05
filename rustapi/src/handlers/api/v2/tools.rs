@@ -497,12 +497,7 @@ pub async fn QQInfo(ctx: ApiCtx) -> Response {
     };
     let url =
         format!("http://r.qzone.qq.com/fcg-bin/cgi_get_portrait.fcg?g_tk=1518561325&uins={qq}");
-    let bytes_resp = ctx
-        .state
-        .http
-        .get(&url)
-        .send()
-        .await;
+    let bytes_resp = ctx.state.http.get(&url).send().await;
     let bytes = match bytes_resp {
         Ok(r) => r.bytes().await.ok(),
         Err(_) => None,
