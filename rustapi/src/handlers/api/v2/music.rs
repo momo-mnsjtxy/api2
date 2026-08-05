@@ -27,10 +27,24 @@ pub async fn Music_163(ctx: ApiCtx) -> Response {
 pub async fn Music(ctx: ApiCtx) -> Response {
     super::log_action(&ctx, "music").await;
     let input = ctx.param_or("input", "").trim();
-    let class = ctx.param_or("class", "name");
-    let site = ctx.param_or("site", "");
+    let class = ctx.param("filter").or_else(|| ctx.param("class"));
+    let site = ctx
+        .param("type")
+        .or_else(|| ctx.param("site"))
+        .unwrap_or("");
     let page = ctx.param_or("page", "0");
-    let value = services::music::music_search(&ctx.state.http, input, site, page).await;
+    let value = if let Some(class) = class.filter(|class| !class.is_empty()) {
+        services::music::data(
+            &ctx.state.http,
+            input,
+            class,
+            site,
+            page.parse::<i64>().unwrap_or(1),
+        )
+        .await
+    } else {
+        services::music::music_search(&ctx.state.http, input, site, page).await
+    };
     let code = vstr(&value, "/code");
     let data = value.get("data").cloned().unwrap_or(Value::Null);
     let wrapped = if data.is_array() {
@@ -117,7 +131,7 @@ async fn provider_by_id(ctx: ApiCtx, provider: &str, fail_msg: &str) -> Response
     let Some(id) = ctx.param("id") else {
         return err(&ctx, 400, "参数错误");
     };
-    let value = services::music::music_search(&ctx.state.http, id, provider, "1").await;
+    let value = services::music::data(&ctx.state.http, id, "id", provider, 1).await;
     provider_response(&ctx, value, fail_msg)
 }
 
