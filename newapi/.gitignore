@@ -1,0 +1,8 @@
+/vendor/
+/runtime/*
+!/runtime/.gitkeep
+/public/uploads/*
+!/public/uploads/.gitkeep
+composer.phar
+.env
+*.cache
