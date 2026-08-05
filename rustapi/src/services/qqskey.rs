@@ -17,7 +17,6 @@ use url::form_urlencoded;
 
 const QQ_UA: &str =
     "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/69.0.3497.100 Safari/537.36";
-const QZONE_LOGIN_URL: &str = "https://qzs.qq.com/qzone/v5/loginsucc.html?para=izone";
 const XLOGIN_REFERRER: &str = "https://xui.ptlogin2.qq.com/cgi-bin/xlogin";
 
 pub struct QqLogin {
