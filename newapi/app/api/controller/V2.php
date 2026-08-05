@@ -2731,7 +2731,7 @@ public function UserInfo(Request $request){
 	    $id = $request->param('id');
 	    if(!empty($id) && isset($id)){
 	        if(Cache::store('redis')->get('Music_List_ID_163'.$id) == null){
-	            require 'extend/netease/GetWangYiYunInfo.php';
+	            require_once ROOT_PATH . 'extend/netease/GetWangYiYunInfo.php';
 	            $res = new \GetWangYiYunInfo();
                 $data = $res->list('http://music.163.com/discover/toplist?id='.$id);
                 Cache::store('redis')->set('Music_List_ID_163'.$id,json_encode($data,JSON_UNESCAPED_UNICODE));

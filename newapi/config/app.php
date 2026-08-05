@@ -1,34 +1,11 @@
 <?php
-// +----------------------------------------------------------------------
-// | 应用设置
-// +----------------------------------------------------------------------
 
 return [
-    // 应用地址
-    'app_host'               => '',
-    // 应用的命名空间
-    'app_namespace'          => '',
-    // 是否启用路由
-    'with_route'             => true,
-    // 默认应用
-    'default_app'            => 'index',
-    // 默认时区
-    'default_timezone'       => 'PRC',
-    // 应用映射（自动多应用模式有效）
-    'app_map'                => [],
-    // 域名绑定（自动多应用模式有效）
-    'domain_bind'            => [],
-    // 禁止URL访问的应用列表（自动多应用模式有效）
-    'deny_app_list'          => [],
-    // 异常处理 handle 类 留空使用 \think\exception\Handle
-    'exception_handle'       => '',
-    // 错误显示信息,非调试模式有效
-    'error_message'          => '页面错误！请稍后再试～',
-    // 显示错误信息
-    'show_error_msg'         => false,
-    // 异常页面的模板文件
-    'exception_tmpl'         => app()->getRootPath() . 'public/tpl/think_exception.tpl',
-    // 默认跳转页面对应的模板文件
-    'dispatch_success_tmpl'  => app()->getRootPath() . 'public/tpl/dispatch_jump.tpl',
-    'dispatch_error_tmpl'    => app()->getRootPath() . 'public/tpl/dispatch_jump.tpl',
+    'app_debug' => true,
+    'app_name' => '梦城API',
+    'app_url' => '',
+    'default_module' => 'index',
+    'default_controller' => 'Index',
+    'default_action' => 'index',
+    'timezone' => 'Asia/Shanghai',
 ];

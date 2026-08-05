@@ -1,36 +1,26 @@
 {
-    "name": "topthink/think",
-    "description": "the new thinkphp framework",
+    "name": "gqink/api",
+    "description": "Pure PHP rewrite of the API platform (no ThinkPHP)",
     "type": "project",
-    "keywords": [
-        "framework",
-        "thinkphp",
-        "ORM"
-    ],
-    "homepage": "http://thinkphp.cn/",
     "license": "Apache-2.0",
-    "authors": [
-        {
-            "name": "liu21st",
-            "email": "liu21st@gmail.com"
-        }
-    ],
     "require": {
         "php": ">=8.1",
-        "topthink/framework": "8.0.*",
         "guzzlehttp/guzzle": "^7.8",
-        "jaeger/querylist": "~4.4.0",
-        "endroid/qr-code": "^5.1"
+        "jaeger/querylist": "~4.4.0"
     },
     "autoload": {
         "psr-4": {
-            "app\\": "app"
-        }
-    },
-    "extra": {
-        "think-path": "vendor/topthink/framework"
+            "Core\\": "core/",
+            "app\\": "app/",
+            "think\\": "think/"
+        },
+        "files": [
+            "core/helpers.php",
+            "app/common.php"
+        ]
     },
     "config": {
-        "preferred-install": "dist"
+        "preferred-install": "dist",
+        "optimize-autoloader": true
     }
 }

@@ -265,7 +265,7 @@ class Update
 	}
 
 	public function net(){
-		require 'extend/netease/GetWangYiYunInfo.php';
+		require_once ROOT_PATH . 'extend/netease/GetWangYiYunInfo.php';
         $res = new \GetWangYiYunInfo();
         $data = $res->hot('http://music.163.com/discover/toplist?id=3778678');
         for($a = 0 ; $a < count($data); $a++){
