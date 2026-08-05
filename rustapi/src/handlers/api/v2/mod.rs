@@ -401,5 +401,6 @@ pub(crate) fn rand_hex_color() -> String {
 }
 
 pub(crate) fn valid_http_url(url: &str) -> bool {
-    matches!(url::Url::parse(url), Ok(u) if u.scheme() == "http" || u.scheme() == "https")
+    (url.starts_with("http://") || url.starts_with("https://"))
+        && url[8.min(url.len())..].contains('.')
 }
