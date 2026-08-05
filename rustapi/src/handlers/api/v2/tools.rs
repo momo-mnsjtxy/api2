@@ -364,9 +364,11 @@ pub async fn check_domain(ctx: ApiCtx) -> Response {
         .post("http://panda.www.net.cn/cgi-bin/check.cgi")
         .body(format!("area_domain={domain}"))
         .send()
-        .await
-        .ok()
-        .and_then(|r| async move { r.text().await.ok() }.await);
+        .await;
+    let resp = match resp {
+        Ok(r) => r.text().await.ok(),
+        Err(_) => None,
+    };
     let Some(xml) = resp else {
         return err(&ctx, 400, "请求失败");
     };
@@ -495,14 +497,16 @@ pub async fn QQInfo(ctx: ApiCtx) -> Response {
     };
     let url =
         format!("http://r.qzone.qq.com/fcg-bin/cgi_get_portrait.fcg?g_tk=1518561325&uins={qq}");
-    let bytes = ctx
+    let bytes_resp = ctx
         .state
         .http
         .get(&url)
         .send()
-        .await
-        .ok()
-        .and_then(|r| async move { r.bytes().await.ok() }.await);
+        .await;
+    let bytes = match bytes_resp {
+        Ok(r) => r.bytes().await.ok(),
+        Err(_) => None,
+    };
     let text = bytes
         .map(|b| String::from_utf8_lossy(&b).into_owned())
         .unwrap_or_default();

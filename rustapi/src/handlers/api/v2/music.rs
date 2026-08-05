@@ -136,6 +136,14 @@ fn provider_response(ctx: &ApiCtx, value: Value, fail_msg: &str) -> Response {
 
 fn normalize_163(id: &str, raw: Value) -> Value {
     let author = vstr(&raw, "/artists");
+    let lrc = {
+        let lrc = choose(&raw, &["/lrc"]);
+        if lrc.is_empty() {
+            "此音乐暂无歌词".to_string()
+        } else {
+            lrc
+        }
+    };
     json!({
         "song_id": id,
         "name": choose(&raw, &["/name", "/song_name"]),
@@ -144,10 +152,7 @@ fn normalize_163(id: &str, raw: Value) -> Value {
         "url": choose(&raw, &["/url"]),
         "cover": choose(&raw, &["/cover", "/pic"]),
         "artists_img1v1Url": choose(&raw, &["/artists_img1v1Url"]),
-        "lrc": {
-            let lrc = choose(&raw, &["/lrc"]);
-            if lrc.is_empty() { "此音乐暂无歌词".to_string() } else { lrc }
-        },
+        "lrc": lrc,
     })
 }
 
