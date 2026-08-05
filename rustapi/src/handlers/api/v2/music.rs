@@ -27,13 +27,14 @@ pub async fn Music_163(ctx: ApiCtx) -> Response {
 pub async fn Music(ctx: ApiCtx) -> Response {
     super::log_action(&ctx, "music").await;
     let input = ctx.param_or("input", "").trim();
-    let class = ctx.param("filter").or_else(|| ctx.param("class"));
-    let site = ctx
-        .param("type")
-        .or_else(|| ctx.param("site"))
-        .unwrap_or("");
-    let page = ctx.param_or("page", "0");
-    let value = if let Some(class) = class.filter(|class| !class.is_empty()) {
+    // oldapi: `type` is response format (json/xml); music provider is `site`.
+    let class = ctx
+        .param("class")
+        .or_else(|| ctx.param("filter"))
+        .unwrap_or("name");
+    let site = ctx.param("site").filter(|s| !s.is_empty()).unwrap_or("netease");
+    let page = ctx.param_or("page", "1");
+    let value = {
         services::music::data(
             &ctx.state.http,
             input,
@@ -42,8 +43,6 @@ pub async fn Music(ctx: ApiCtx) -> Response {
             page.parse::<i64>().unwrap_or(1),
         )
         .await
-    } else {
-        services::music::music_search(&ctx.state.http, input, site, page).await
     };
     let code = vstr(&value, "/code");
     let data = value.get("data").cloned().unwrap_or(Value::Null);

@@ -224,7 +224,9 @@ pub async fn IP_IMG(ctx: ApiCtx) -> Response {
         let _ = services::image_text::draw_text(&mut rgba, &font_bytes, &text, 10.0, y, size, color);
     }
     let mut out = Vec::new();
-    if image::DynamicImage::ImageRgba8(rgba)
+    // JPEG encoder requires RGB8 (no alpha).
+    let rgb = image::DynamicImage::ImageRgba8(rgba).to_rgb8();
+    if image::DynamicImage::ImageRgb8(rgb)
         .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
         .is_err()
     {

@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::Local;
 use serde_json::{json, Value};
-use sqlx::MySqlPool;
+use sqlx::{MySqlPool, Row};
 
 use crate::{respond, services, state::AppState};
 
@@ -172,18 +172,18 @@ pub async fn netease(State(state): State<AppState>) -> Response {
         }
     }
     // Fallback: synthesize one row from music search so the job surface stays useful.
-    if let Ok(Value::Object(map)) = Ok::<_, ()>(
-        services::music::data(&state.http, "热歌", "name", "netease", 1).await,
-    ) {
+    for site in ["netease", "kugou", "kuwo", "qq"] {
+        let map = services::music::data(&state.http, "热歌", "name", site, 1).await;
         if let Some(arr) = map.get("data").and_then(Value::as_array) {
             if let Some(song) = arr.first() {
+                let title = song.get("title").cloned().unwrap_or(json!(""));
                 let synth = json!({
-                    "name": song.get("title").cloned().unwrap_or(json!("")),
+                    "name": title.clone(),
                     "images": song.get("pic").cloned().unwrap_or(json!("")),
                     "author": song.get("author").cloned().unwrap_or(json!("")),
                     "url": song.get("url").cloned().unwrap_or(json!("")),
                     "nickname": "网易云热评",
-                    "content": song.get("title").cloned().unwrap_or(json!("")),
+                    "content": title,
                 });
                 return text(insert_hot_comment(&state.pool, &synth).await);
             }
@@ -269,15 +269,30 @@ pub async fn net(State(state): State<AppState>) -> Response {
 }
 
 pub async fn dog(State(state): State<AppState>) -> Response {
+    // Ensure legacy `dog` table exists (oldapi schema may be incomplete in local DBs).
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS `dog` (
+            `id` int(11) NOT NULL AUTO_INCREMENT,
+            `text` text DEFAULT NULL,
+            PRIMARY KEY (`id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3",
+    )
+    .execute(&state.pool)
+    .await;
+
     let mut quote = String::new();
     for url in [
         "https://v1.alapi.cn/api/dog?format=json",
         "https://api.oick.cn/dutang/api.php",
+        "https://api.vvhan.com/api/text/dog?type=json",
+        "https://api.gumengya.com/Api/DogDog?format=json",
     ] {
         if let Some(v) = fetch_json(&state, url).await {
             quote = v
                 .pointer("/data/content")
+                .or_else(|| v.pointer("/data/text"))
                 .or_else(|| v.get("content"))
+                .or_else(|| v.get("text"))
                 .or_else(|| v.get("data"))
                 .and_then(|x| {
                     if x.is_string() {
@@ -287,7 +302,6 @@ pub async fn dog(State(state): State<AppState>) -> Response {
                     }
                 })
                 .unwrap_or_default();
-            // oick sometimes returns bare JSON string
             if quote.is_empty() {
                 if let Value::String(s) = v {
                     quote = s;
@@ -299,10 +313,21 @@ pub async fn dog(State(state): State<AppState>) -> Response {
         } else if let Ok(resp) = state.http.get(url).send().await {
             if let Ok(t) = resp.text().await {
                 let t = t.trim().trim_matches('"').to_string();
-                if !t.is_empty() && !t.starts_with('<') {
+                if !t.is_empty() && !t.starts_with('<') && !t.starts_with('{') {
                     quote = t;
                     break;
                 }
+            }
+        }
+    }
+    // Last resort: pull a line from local love table so the job never hard-fails.
+    if quote.is_empty() {
+        if let Ok(Some(row)) = sqlx::query("SELECT content FROM `love` ORDER BY RAND() LIMIT 1")
+            .fetch_optional(&state.pool)
+            .await
+        {
+            if let Ok(s) = row.try_get::<String, _>("content") {
+                quote = s;
             }
         }
     }
@@ -315,7 +340,7 @@ pub async fn dog(State(state): State<AppState>) -> Response {
         {
             "更新成功" => "写入成功".to_string(),
             "数据重复" => "重复".to_string(),
-            _ => "失败".to_string(),
+            other => other.to_string(),
         }
     };
     text(format!(
@@ -389,12 +414,18 @@ async fn insert_hot_comment(pool: &MySqlPool, data: &Value) -> String {
     if exists {
         return "数据重复".into();
     }
+    let images = value_string(data.get("picurl"))
+        .or_else(|| value_string(data.get("images")))
+        .unwrap_or_default();
+    let author = value_string(data.get("artistsname"))
+        .or_else(|| value_string(data.get("author")))
+        .unwrap_or_default();
     let inserted = sqlx::query(
         "INSERT INTO `hot` (name, images, author, mp3_url, comment_nickname, comment_content, love) VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(value_string(data.get("name")).unwrap_or_default())
-    .bind(value_string(data.get("picurl")).unwrap_or_default())
-    .bind(value_string(data.get("artistsname")).unwrap_or_default())
+    .bind(images)
+    .bind(author)
     .bind(value_string(data.get("url")).unwrap_or_default())
     .bind(value_string(data.get("nickname")).unwrap_or_default())
     .bind(comment)

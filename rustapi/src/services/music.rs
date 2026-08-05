@@ -163,7 +163,7 @@ async fn netease_search(client: &Client, query: &str, page: i64) -> Result<Vec<V
     let body = http_json(
         client,
         "GET",
-        "http://music.163.com/api/search/get/web",
+        "http://music.163.com/api/search/get",
         &params,
         Some("http://music.163.com/"),
         DESKTOP_UA,
