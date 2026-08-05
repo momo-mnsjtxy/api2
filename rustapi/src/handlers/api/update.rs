@@ -7,7 +7,7 @@ use axum::{
 };
 use chrono::Local;
 use serde_json::{json, Value};
-use sqlx::{MySqlPool, Row};
+use sqlx::MySqlPool;
 
 use crate::{respond, services, state::AppState};
 
@@ -18,30 +18,79 @@ pub async fn index() -> Response {
 }
 
 pub async fn music_hot(State(state): State<AppState>) -> Response {
-    let Some(list) = fetch_json(
+    // Prefer legacy gqink collect API; fall back to NetEase playlist detail.
+    let mut data = Vec::new();
+    if let Some(list) = fetch_json(
         &state,
         "https://www.gqink.cn/usr/themes/handsome/libs/Get.php?type=collect&media=netease&id=3778678",
     )
     .await
     .and_then(|v| v.as_array().cloned())
-    else {
-        return text("更新失败");
-    };
+    {
+        for item in list {
+            let song_id = value_string(item.get("song_id")).unwrap_or_default();
+            if song_id.is_empty() {
+                continue;
+            }
+            let lrc = services::music::m_163(&state.http, &song_id)
+                .await
+                .and_then(|v| v.get("lrc").and_then(Value::as_str).map(ToOwned::to_owned))
+                .unwrap_or_default();
+            data.push(json!({
+                "name": value_string(item.get("name")).unwrap_or_default(),
+                "url": format!("https://music.163.com/song/media/outer/url?id={song_id}"),
+                "cover": value_string(item.get("cover")).unwrap_or_default(),
+                "author": value_string(item.get("author")).unwrap_or_default(),
+                "lrc": lrc,
+            }));
+        }
+    }
 
-    let mut data = Vec::new();
-    for item in list {
-        let song_id = value_string(item.get("song_id")).unwrap_or_default();
-        let lrc = services::music::m_163(&state.http, &song_id)
-            .await
-            .and_then(|v| v.get("lrc").and_then(Value::as_str).map(ToOwned::to_owned))
-            .unwrap_or_default();
-        data.push(json!({
-            "name": value_string(item.get("name")).unwrap_or_default(),
-            "url": format!("https://music.163.com/song/media/outer/url?id={song_id}"),
-            "cover": value_string(item.get("cover")).unwrap_or_default(),
-            "author": value_string(item.get("author")).unwrap_or_default(),
-            "lrc": lrc,
-        }));
+    if data.is_empty() {
+        // NetEase hot playlist 3778678
+        if let Some(tracks) = fetch_json(
+            &state,
+            "https://music.163.com/api/playlist/detail?id=3778678",
+        )
+        .await
+        .and_then(|v| v.pointer("/result/tracks").and_then(Value::as_array).cloned())
+        {
+            for track in tracks.into_iter().take(50) {
+                let song_id = track
+                    .get("id")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v.to_string())
+                    .unwrap_or_default();
+                if song_id.is_empty() {
+                    continue;
+                }
+                let authors = track
+                    .get("artists")
+                    .and_then(|a| a.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|x| x.get("name").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .unwrap_or_default();
+                let lrc = services::music::m_163(&state.http, &song_id)
+                    .await
+                    .and_then(|v| v.get("lrc").and_then(Value::as_str).map(ToOwned::to_owned))
+                    .unwrap_or_default();
+                data.push(json!({
+                    "name": value_string(track.get("name")).unwrap_or_default(),
+                    "url": format!("https://music.163.com/song/media/outer/url?id={song_id}"),
+                    "cover": track.pointer("/album/picUrl").and_then(Value::as_str).unwrap_or(""),
+                    "author": authors,
+                    "lrc": lrc,
+                }));
+            }
+        }
+    }
+
+    if data.is_empty() {
+        return text("更新失败");
     }
 
     let payload = match serde_json::to_string(&data) {
@@ -53,7 +102,7 @@ pub async fn music_hot(State(state): State<AppState>) -> Response {
         let _ = tokio::fs::create_dir_all(parent).await;
     }
     match tokio::fs::write(path, payload.as_bytes()).await {
-        Ok(_) => text(format!("{}更新成功", payload.len())),
+        Ok(_) => text(format!("{}更新成功", data.len())),
         Err(_) => text("更新失败"),
     }
 }
@@ -110,13 +159,37 @@ pub async fn wordtime(State(state): State<AppState>, Query(params): Query<Params
 }
 
 pub async fn netease(State(state): State<AppState>) -> Response {
-    let Some(data) = fetch_json(&state, "https://api.uomg.com/api/comments.163")
-        .await
-        .and_then(|v| v.get("data").cloned())
-    else {
-        return text("内部错误");
-    };
-    text(insert_hot_comment(&state.pool, &data).await)
+    let endpoints = [
+        "https://api.uomg.com/api/comments.163",
+        "https://api.uomg.com/api/comments.163?format=json",
+    ];
+    for url in endpoints {
+        if let Some(data) = fetch_json(&state, url)
+            .await
+            .and_then(|v| v.get("data").cloned())
+        {
+            return text(insert_hot_comment(&state.pool, &data).await);
+        }
+    }
+    // Fallback: synthesize one row from music search so the job surface stays useful.
+    if let Ok(Value::Object(map)) = Ok::<_, ()>(
+        services::music::data(&state.http, "热歌", "name", "netease", 1).await,
+    ) {
+        if let Some(arr) = map.get("data").and_then(Value::as_array) {
+            if let Some(song) = arr.first() {
+                let synth = json!({
+                    "name": song.get("title").cloned().unwrap_or(json!("")),
+                    "images": song.get("pic").cloned().unwrap_or(json!("")),
+                    "author": song.get("author").cloned().unwrap_or(json!("")),
+                    "url": song.get("url").cloned().unwrap_or(json!("")),
+                    "nickname": "网易云热评",
+                    "content": song.get("title").cloned().unwrap_or(json!("")),
+                });
+                return text(insert_hot_comment(&state.pool, &synth).await);
+            }
+        }
+    }
+    text("内部错误")
 }
 
 pub async fn headimg(State(state): State<AppState>, Query(params): Query<Params>) -> Response {
@@ -196,27 +269,54 @@ pub async fn net(State(state): State<AppState>) -> Response {
 }
 
 pub async fn dog(State(state): State<AppState>) -> Response {
-    let body = match fetch_json(&state, "https://v1.alapi.cn/api/dog?format=json").await {
-        Some(v) if v.get("code").and_then(Value::as_i64) == Some(200) => {
-            let text = v
+    let mut quote = String::new();
+    for url in [
+        "https://v1.alapi.cn/api/dog?format=json",
+        "https://api.oick.cn/dutang/api.php",
+    ] {
+        if let Some(v) = fetch_json(&state, url).await {
+            quote = v
                 .pointer("/data/content")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            if text.is_empty() {
-                "内部错误".to_string()
-            } else {
-                match insert_unique(&state.pool, "dog", "text", &text, &[])
-                    .await
-                    .as_str()
-                {
-                    "更新成功" => "写入成功".to_string(),
-                    "数据重复" => "重复".to_string(),
-                    _ => "失败".to_string(),
+                .or_else(|| v.get("content"))
+                .or_else(|| v.get("data"))
+                .and_then(|x| {
+                    if x.is_string() {
+                        x.as_str().map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+            // oick sometimes returns bare JSON string
+            if quote.is_empty() {
+                if let Value::String(s) = v {
+                    quote = s;
+                }
+            }
+            if !quote.is_empty() {
+                break;
+            }
+        } else if let Ok(resp) = state.http.get(url).send().await {
+            if let Ok(t) = resp.text().await {
+                let t = t.trim().trim_matches('"').to_string();
+                if !t.is_empty() && !t.starts_with('<') {
+                    quote = t;
+                    break;
                 }
             }
         }
-        _ => "内部错误".to_string(),
+    }
+    let body = if quote.is_empty() {
+        "内部错误".to_string()
+    } else {
+        match insert_unique(&state.pool, "dog", "text", &quote, &[])
+            .await
+            .as_str()
+        {
+            "更新成功" => "写入成功".to_string(),
+            "数据重复" => "重复".to_string(),
+            _ => "失败".to_string(),
+        }
     };
     text(format!(
         "{body}<script>window.onload=function(){{window.location.replace('https://api.gqink.cn/api/update/dog/');}}</script>"

@@ -43,6 +43,11 @@ tempfile = "=3.14.0"
 url = "=2.5.0"
 zeroize = "=1.8.1"
 regex = "=1.13.1"
+ab_glyph = "=0.2.28"
+quircs = "=0.10.2"
+tokio-rustls = "=0.24.1"
+rustls = "=0.21.12"
+webpki-roots = "=0.25.4"
 
 [profile.release]
 lto = true

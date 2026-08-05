@@ -161,13 +161,76 @@ pub async fn IP(ctx: ApiCtx) -> Response {
 
 pub async fn IP_IMG(ctx: ApiCtx) -> Response {
     super::log_action(&ctx, "IP_IMG").await;
-    let img = super::read_public_file(&ctx, "xhxh.jpg").await;
-    let font = super::read_public_file(&ctx, "msyh.ttf").await;
-    if img.is_none() || font.is_none() {
+    let Some(img_bytes) = super::read_public_file(&ctx, "xhxh.jpg").await else {
         return err(&ctx, 400, "IP签名图资源缺失");
+    };
+    let Some(font_bytes) = super::read_public_file(&ctx, "msyh.ttf").await else {
+        return err(&ctx, 400, "IP签名图资源缺失");
+    };
+
+    let location = baidu_ip_location(&ctx, &ctx.ip)
+        .await
+        .unwrap_or_else(|| "未知".into());
+    let bro = util::get_bro(&ctx.ua);
+    let os = util::get_os_info(&ctx.ua).0;
+    let week = ["日", "一", "二", "三", "四", "五", "六"];
+    let now = chrono::Local::now();
+    let weekday = week[now.format("%w").to_string().parse::<usize>().unwrap_or(0)];
+    let custom = ctx
+        .param("s")
+        .and_then(|s| {
+            use base64::{engine::general_purpose::STANDARD, Engine};
+            let s = s.replace(' ', "+");
+            STANDARD
+                .decode(s.as_bytes())
+                .ok()
+                .and_then(|b| String::from_utf8(b).ok())
+        })
+        .unwrap_or_default();
+
+    let Ok(dyn_img) = image::load_from_memory(&img_bytes) else {
+        return err(&ctx, 400, "底图损坏");
+    };
+    let mut rgba = dyn_img.to_rgba8();
+    let red = [255, 0, 0, 255];
+    let black = [0, 0, 0, 255];
+    let lines = [
+        (
+            format!("欢迎您来自{location}的朋友"),
+            40.0_f32,
+            16.0_f32,
+            red,
+        ),
+        (
+            format!(
+                "今天是{}年{}月{}日 星期{weekday}",
+                now.format("%Y"),
+                now.format("%m").to_string().trim_start_matches('0'),
+                now.format("%d").to_string().trim_start_matches('0'),
+            ),
+            72.0,
+            16.0,
+            red,
+        ),
+        (format!("您的IP是:{}", ctx.ip), 104.0, 16.0, red),
+        (format!("您使用的是{os}操作系统"), 140.0, 16.0, red),
+        (format!("您使用的是{bro}浏览器"), 175.0, 16.0, red),
+        (custom, 200.0, 14.0, black),
+    ];
+    for (text, y, size, color) in lines {
+        if text.is_empty() {
+            continue;
+        }
+        let _ = services::image_text::draw_text(&mut rgba, &font_bytes, &text, 10.0, y, size, color);
     }
-    // The PHP endpoint renders text with GD. Without a font renderer dependency, return the base image safely.
-    bytes_response("image/jpeg", img.unwrap())
+    let mut out = Vec::new();
+    if image::DynamicImage::ImageRgba8(rgba)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Jpeg)
+        .is_err()
+    {
+        return err(&ctx, 400, "渲染失败");
+    }
+    bytes_response("image/jpeg", out)
 }
 
 pub async fn Email(ctx: ApiCtx) -> Response {

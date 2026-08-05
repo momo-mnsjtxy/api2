@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use axum::{
     extract::{Form, State},
+    http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
     Json,
 };
@@ -20,12 +21,28 @@ pub async fn index(session: Session, jar: CookieJar) -> Response {
     Html(LOGIN_HTML).into_response()
 }
 
-pub async fn gt_code(State(state): State<AppState>, session: Session, jar: CookieJar) -> Response {
+pub async fn gt_code(
+    State(state): State<AppState>,
+    session: Session,
+    jar: CookieJar,
+    headers: HeaderMap,
+) -> Response {
     if auth::current_user(&session, &jar).await.is_some() {
         return Redirect::to("/index/index/index").into_response();
     }
-    let gt = Geetest::new(&state.config.geetest_id, &state.config.geetest_key);
-    let status = gt.pre_process();
+    let ip = util::client_ip(&headers, None);
+    let mut gt = Geetest::new(&state.config.geetest_id, &state.config.geetest_key);
+    let status = gt
+        .pre_process(
+            &state.http,
+            &[
+                ("user_id", "Login"),
+                ("client_type", "web"),
+                ("ip_address", ip.as_str()),
+            ],
+            1,
+        )
+        .await;
     let _ = session.insert("gtserver", status).await;
     let _ = session.insert("class", "Login").await;
     Json(gt.response_json()).into_response()
@@ -35,6 +52,7 @@ pub async fn callback(
     State(state): State<AppState>,
     session: Session,
     jar: CookieJar,
+    headers: HeaderMap,
     Form(form): Form<FormData>,
 ) -> Response {
     if auth::current_user(&session, &jar).await.is_some() {
@@ -51,8 +69,20 @@ pub async fn callback(
         .ok()
         .flatten()
         .unwrap_or(0);
+    let ip = util::client_ip(&headers, None);
     let captcha_ok = if gtserver == 1 {
-        gt.success_validate(&challenge, &validate, &seccode)
+        gt.success_validate(
+            &state.http,
+            &challenge,
+            &validate,
+            &seccode,
+            &[
+                ("user_id", "Login"),
+                ("client_type", "web"),
+                ("ip_address", ip.as_str()),
+            ],
+        )
+        .await
     } else {
         gt.fail_validate(&challenge, &validate, &seccode)
     };
@@ -106,7 +136,7 @@ const LOGIN_HTML: &str = r#"<!doctype html>
         <p class="text-muted text-center">输入您的账号密码来访问控制面板</p>
         <form method="post" action="/login/index/callback">
           <input type="hidden" name="geetest_challenge" value="rust-fallback">
-          <input type="hidden" name="geetest_validate" value="rust-fallback">
+          <input type="hidden" name="geetest_validate" value="d22957a63a507af42dc95a259d8bc8f5">
           <input type="hidden" name="geetest_seccode" value="rust-fallback">
           <div class="form-group mb-3">
             <label>邮箱或用户名</label>

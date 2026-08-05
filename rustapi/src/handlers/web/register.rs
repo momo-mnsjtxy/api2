@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use axum::{
     extract::{Form, State},
+    http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
     Json,
 };
@@ -27,9 +28,24 @@ pub async fn index(session: Session, jar: CookieJar) -> Response {
     Html(REGISTER_HTML).into_response()
 }
 
-pub async fn gt_code(State(state): State<AppState>, session: Session) -> Response {
-    let gt = Geetest::new(&state.config.geetest_id, &state.config.geetest_key);
-    let status = gt.pre_process();
+pub async fn gt_code(
+    State(state): State<AppState>,
+    session: Session,
+    headers: HeaderMap,
+) -> Response {
+    let ip = util::client_ip(&headers, None);
+    let mut gt = Geetest::new(&state.config.geetest_id, &state.config.geetest_key);
+    let status = gt
+        .pre_process(
+            &state.http,
+            &[
+                ("user_id", "register"),
+                ("client_type", "web"),
+                ("ip_address", ip.as_str()),
+            ],
+            1,
+        )
+        .await;
     let _ = session.insert("gtserver", status).await;
     let _ = session.insert("class", "register").await;
     Json(gt.response_json()).into_response()
@@ -39,13 +55,15 @@ pub async fn email(
     State(state): State<AppState>,
     session: Session,
     jar: CookieJar,
+    headers: HeaderMap,
     Form(form): Form<FormData>,
 ) -> Response {
     if auth::current_user(&session, &jar).await.is_some() {
         return Json(json!({"code": 200, "msg": "您已登陆"})).into_response();
     }
 
-    if !captcha_ok(&state, &session, &form).await {
+    let ip = util::client_ip(&headers, None);
+    if !captcha_ok(&state, &session, &form, &ip).await {
         return Json(json!({"code": 400, "msg": "抱歉，验证码验证未通过"})).into_response();
     }
 
@@ -152,7 +170,7 @@ pub async fn callback(
     }
 }
 
-async fn captcha_ok(state: &AppState, session: &Session, form: &FormData) -> bool {
+async fn captcha_ok(state: &AppState, session: &Session, form: &FormData, ip: &str) -> bool {
     let gt = Geetest::new(&state.config.geetest_id, &state.config.geetest_key);
     let challenge = trimmed(form, "geetest_challenge");
     let validate = trimmed(form, "geetest_validate");
@@ -164,7 +182,18 @@ async fn captcha_ok(state: &AppState, session: &Session, form: &FormData) -> boo
         .flatten()
         .unwrap_or(0);
     if gtserver == 1 {
-        gt.success_validate(&challenge, &validate, &seccode)
+        gt.success_validate(
+            &state.http,
+            &challenge,
+            &validate,
+            &seccode,
+            &[
+                ("user_id", "register"),
+                ("client_type", "web"),
+                ("ip_address", ip),
+            ],
+        )
+        .await
     } else {
         gt.fail_validate(&challenge, &validate, &seccode)
     }
@@ -235,7 +264,7 @@ const REGISTER_HTML: &str = r#"<!doctype html>
         <h3 class="text-center">账号注册</h3>
         <form method="post" action="/register/index/callback">
           <input type="hidden" name="geetest_challenge" value="rust-fallback">
-          <input type="hidden" name="geetest_validate" value="rust-fallback">
+          <input type="hidden" name="geetest_validate" value="d22957a63a507af42dc95a259d8bc8f5">
           <input type="hidden" name="geetest_seccode" value="rust-fallback">
           <div class="form-group mb-3"><label>用户名</label><input class="form-control" name="UserName" required></div>
           <div class="form-group mb-3"><label>邮箱</label><input class="form-control" type="email" name="Email" required></div>
@@ -245,7 +274,7 @@ const REGISTER_HTML: &str = r#"<!doctype html>
         </form>
         <form class="mt-3" method="post" action="/register/index/Email">
           <input type="hidden" name="geetest_challenge" value="rust-fallback">
-          <input type="hidden" name="geetest_validate" value="rust-fallback">
+          <input type="hidden" name="geetest_validate" value="d22957a63a507af42dc95a259d8bc8f5">
           <input type="hidden" name="geetest_seccode" value="rust-fallback">
           <div class="input-group">
             <input class="form-control" type="email" name="Email" placeholder="输入邮箱发送验证码">
