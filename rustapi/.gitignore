@@ -1,0 +1,7 @@
+/target/
+/runtime/
+.env
+*.eml
+Cargo.lock
+# keep lock for apps - actually commit Cargo.lock for binary
+!Cargo.lock
