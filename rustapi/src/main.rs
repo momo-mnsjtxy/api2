@@ -59,13 +59,13 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/v2/upload", any(api_v2_upload_named))
         .route("/api/v2/Baidu_Upload", any(api_v2_baidu_upload))
         .route("/api/v2/Sogou_Upload", any(api_v2_sogou_upload))
-        .route("/api/v2/{action}", any(api_v2_action))
+        .route("/api/v2/:action", any(api_v2_action))
         .route("/api/page", any(api_page_action_default))
         .route("/api/page/", any(api_page_action_default))
-        .route("/api/page/{action}", any(api_page_action))
+        .route("/api/page/:action", any(api_page_action))
         .route("/api/update", any(api_update_action_default))
         .route("/api/update/", any(api_update_action_default))
-        .route("/api/update/{action}", any(api_update_action))
+        .route("/api/update/:action", any(api_update_action))
         .route("/api/skey", any(handlers::api::skey::index))
         .route("/api/skey/", any(handlers::api::skey::index))
         .route("/api/skey/index", any(handlers::api::skey::index))
@@ -101,8 +101,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/index/index/LoginOut", any(handlers::web::index::LoginOut))
         .route("/index/index/ip", any(handlers::web::index::ip))
         .route("/index/index/log", any(handlers::web::index::log))
-        // fallback PATHINFO: /{module}/{controller}/{action}
-        .route("/{module}/{controller}/{action}", any(pathinfo_fallback))
+        // fallback PATHINFO: /{module}/{controller}/:action
+        .route("/:module/:controller/:action", any(pathinfo_fallback))
         .nest_service("/public", ServeDir::new(public_dir))
         .layer(DefaultBodyLimit::max(12 * 1024 * 1024))
         .layer(session_layer)
@@ -295,7 +295,7 @@ async fn pathinfo_fallback(
         ("api", "index") => handlers::api::index::index().await,
         _ => (
             axum::http::StatusCode::NOT_FOUND,
-            format!("not found: /{module}/{controller}/{action}"),
+            format!("not found: /{module}/{controller}/:action"),
         )
             .into_response(),
     }

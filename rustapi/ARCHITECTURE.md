@@ -96,7 +96,7 @@ rustapi/
 
 | 能力 | Crate | 对应旧实现 |
 |------|-------|-----------|
-| HTTP | `axum` + `tokio` | ThinkPHP 多模块入口 |
+| HTTP | `axum` 0.7 + `tokio`（路径参数用 `/:name`） | ThinkPHP 多模块入口 |
 | DB | `sqlx` (MySQL) | `think\Db` |
 | 模板 | `askama` | Think 模板 `.html` |
 | Session | `tower-sessions` (cookie store) | `think\Session` |
