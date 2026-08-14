@@ -25,7 +25,7 @@ pub async fn index(session: Session, jar: CookieJar) -> Response {
     if auth::current_user(&session, &jar).await.is_some() {
         return Redirect::to("/index/index/index").into_response();
     }
-    Html(REGISTER_HTML).into_response()
+    Html(register_html()).into_response()
 }
 
 pub async fn gt_code(
@@ -245,48 +245,37 @@ fn valid_email(email: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'@'))
 }
 
-const REGISTER_HTML: &str = r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>账号注册 - 梦城API</title>
-  <link rel="shortcut icon" href="https://cdn.gqink.cn/favicon.ico">
-  <link href="https://cdn.gqink.cn/var2/css/app.min.css" rel="stylesheet" type="text/css">
-</head>
-<body class="authentication-bg">
-  <main class="container" style="max-width:560px;margin-top:5rem">
-    <div class="card">
-      <div class="card-header text-center bg-primary">
-        <img src="https://cdn.gqink.cn/blog/logo.svg" alt="梦城API" height="48">
-      </div>
-      <div class="card-body">
-        <h3 class="text-center">账号注册</h3>
-        <form method="post" action="/register/index/callback">
-          <input type="hidden" name="geetest_challenge" value="rust-fallback">
-          <input type="hidden" name="geetest_validate" value="d22957a63a507af42dc95a259d8bc8f5">
-          <input type="hidden" name="geetest_seccode" value="rust-fallback">
-          <div class="form-group mb-3"><label>用户名</label><input class="form-control" name="UserName" required></div>
-          <div class="form-group mb-3"><label>邮箱</label><input class="form-control" type="email" name="Email" required></div>
-          <div class="form-group mb-3"><label>邮箱验证码</label><input class="form-control" name="Email_Code" placeholder="先 POST /register/index/Email 发送验证码" required></div>
-          <div class="form-group mb-3"><label>密码</label><input class="form-control" type="password" name="Password" required></div>
-          <button class="btn btn-primary btn-block" type="submit">注册</button>
-        </form>
-        <form class="mt-3" method="post" action="/register/index/Email">
-          <input type="hidden" name="geetest_challenge" value="rust-fallback">
-          <input type="hidden" name="geetest_validate" value="d22957a63a507af42dc95a259d8bc8f5">
-          <input type="hidden" name="geetest_seccode" value="rust-fallback">
-          <div class="input-group">
-            <input class="form-control" type="email" name="Email" placeholder="输入邮箱发送验证码">
-            <div class="input-group-append"><button class="btn btn-info" type="submit">发送验证码</button></div>
-          </div>
-        </form>
-        <p class="text-center mt-3">已有账号? <a href="/login/index/index">登陆</a></p>
-      </div>
-    </div>
-  </main>
-  <footer class="footer footer-alt">2020 © 梦城 - www.gqink.cn</footer>
-  <script src="https://cdn.gqink.cn/var2/javascript/app.min.js"></script>
-  <script src="https://cdn.gqink.cn/blog/New/js/gt.js"></script>
-</body>
-</html>"#;
+fn register_html() -> String {
+    use super::ui;
+    let panel = format!(
+        r#"<h2 class="panel-title">创建账户</h2>
+<p class="panel-sub">免费注册，获取 APPID / APPKEY</p>
+<form class="form-stack" method="post" action="/register/index/callback">
+  {gt}
+  {user}
+  {email}
+  {code}
+  {pass}
+  <button class="btn btn-filled btn-block" type="submit">注册</button>
+</form>
+<form class="form-stack" method="post" action="/register/index/Email" style="margin-top:1rem">
+  {gt2}
+  {email2}
+  <button class="btn btn-tonal btn-block" type="submit">发送邮箱验证码</button>
+</form>
+<p class="auth-links">已有账号？ <a href="/login/index/index">去登陆</a></p>"#,
+        gt = ui::geetest_hidden(),
+        gt2 = ui::geetest_hidden(),
+        user = ui::field("用户名", "UserName", "text", r#"required"#),
+        email = ui::field("邮箱", "Email", "email", r#"required"#),
+        code = ui::field(
+            "邮箱验证码",
+            "Email_Code",
+            "text",
+            r#"placeholder="先发送验证码" required"#
+        ),
+        pass = ui::field("密码", "Password", "password", r#"required"#),
+        email2 = ui::field("邮箱", "Email", "email", r#"placeholder="接收验证码的邮箱" required"#),
+    );
+    ui::auth_layout("账号注册", &panel)
+}

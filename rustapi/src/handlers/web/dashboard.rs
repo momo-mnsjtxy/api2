@@ -14,6 +14,8 @@ use tower_sessions::Session;
 
 use crate::{auth, services::mail, state::AppState, util};
 
+use super::ui;
+
 type Params = HashMap<String, String>;
 type FormData = HashMap<String, String>;
 
@@ -54,17 +56,22 @@ pub async fn index(State(state): State<AppState>, session: Session, jar: CookieJ
         .await
         .unwrap_or_default();
     let body = format!(
-        r#"<h1>控制中心</h1>
-<div class="row">
-  {cards}
-</div>
-<h3>最近调用</h3>
+        r#"<div class="stat-grid">{cards}</div>
+{chart}
 {recent}
 "#,
         cards = stat_cards(&stats),
-        recent = request_table(&recent),
+        chart = week_chart(&stats),
+        recent = ui::section_card(
+            "最近 30 次调用",
+            &format!(
+                r#"<a class="btn btn-tonal" href="javascript:location.reload()">{}刷新</a>"#,
+                ui::icon("refresh")
+            ),
+            &request_table(&recent),
+        ),
     );
-    Html(layout("控制中心", &user, &apis, &body)).into_response()
+    Html(layout("控制中心", "home", &user, &apis, None, &body)).into_response()
 }
 
 pub async fn page(
@@ -106,26 +113,44 @@ pub async fn page(
 
     let stats = dashboard_stats(&state.pool, user.uid, Some(&api.keyword)).await;
     let params_table = action_table(&api.action);
-    let body = format!(
-        r#"<h1>{name}</h1>
-<p>{des}</p>
-<div class="row">{cards}</div>
-<h3>请求方式</h3>
-<table class="table table-bordered"><tr><th>GET</th><th>POST</th><th>PUT</th></tr><tr><td>{get}</td><td>{post}</td><td>{put}</td></tr></table>
-<h3>参数说明</h3>{params_table}
-<h3>调用记录</h3>
-<p><a class="btn btn-secondary" href="/index/index/page?api={keyword}&type=list">JSON 列表</a></p>
-"#,
-        name = html_escape(&api.name),
-        des = html_escape(&api.des),
-        cards = stat_cards(&stats),
-        get = support_text(api.raw.get("get")),
-        post = support_text(api.raw.get("post")),
-        put = support_text(api.raw.get("put")),
-        params_table = params_table,
-        keyword = html_escape(&api.keyword),
+    let get_ok = support_text(api.raw.get("get")) == "支持";
+    let post_ok = support_text(api.raw.get("post")) == "支持";
+    let put_ok = support_text(api.raw.get("put")) == "支持";
+    let methods_inner = format!(
+        r#"<div class="support-grid">
+  <div class="support-pill"><strong>GET</strong><span class="{g}">{gt}</span></div>
+  <div class="support-pill"><strong>POST</strong><span class="{p}">{pt}</span></div>
+  <div class="support-pill"><strong>PUT</strong><span class="{u}">{ut}</span></div>
+</div>"#,
+        g = if get_ok { "support-ok" } else { "support-no" },
+        p = if post_ok { "support-ok" } else { "support-no" },
+        u = if put_ok { "support-ok" } else { "support-no" },
+        gt = support_text(api.raw.get("get")),
+        pt = support_text(api.raw.get("post")),
+        ut = support_text(api.raw.get("put")),
     );
-    Html(layout(&api.name, &user, &apis, &body)).into_response()
+    let body = format!(
+        r#"<p class="lead">{des}</p>
+<div class="stat-grid">{cards}</div>
+{methods}
+{params}
+{chart}
+<p>{json_btn}</p>
+"#,
+        des = ui::html_escape(&api.des),
+        cards = stat_cards(&stats),
+        methods = ui::section_card("请求方式", "", &methods_inner),
+        params = ui::section_card("参数说明", "", &params_table),
+        chart = week_chart(&stats),
+        json_btn = ui::outlined_button_link(
+            "查看 JSON 调用列表",
+            &format!(
+                "/index/index/page?api={}&type=list",
+                urlencoding::encode(&api.keyword)
+            ),
+        ),
+    );
+    Html(layout(&api.name, "page", &user, &apis, Some(&api.keyword), &body)).into_response()
 }
 
 pub async fn setting(
@@ -149,36 +174,54 @@ pub async fn setting(
     }
 
     let body = format!(
-        r#"<h1>账号设置</h1>
-<div class="row">
-  <div class="col-md-6">
-    <h3>修改登陆密码</h3>
-    <form method="post" action="/index/index/setting?type=RePass">
-      <p>UID: {uid}</p><p>绑定邮箱: {email}</p>
-      <input class="form-control mb-2" type="password" name="Password" placeholder="新密码">
-      <input class="form-control mb-2" name="Email_Code" placeholder="邮箱验证码">
-      <button class="btn btn-primary" type="submit">修改密码</button>
-    </form>
-    <form method="post" action="/index/index/setting?type=doEmail" class="mt-2"><button class="btn btn-info" type="submit">发送改密验证码</button></form>
-  </div>
-  <div class="col-md-6">
-    <h3>修改邮箱绑定</h3>
-    <form method="post" action="/index/index/setting?type=ReEmail">
-      <p>当前邮箱: {email}</p>
-      <input class="form-control mb-2" type="email" name="Email" placeholder="新的邮箱号">
-      <input class="form-control mb-2" name="EmailCode" placeholder="邮箱验证码">
-      <button class="btn btn-primary" type="submit">修改邮箱</button>
-    </form>
-    <form method="post" action="/index/index/setting?type=ReEmailCode" class="mt-2">
-      <input class="form-control mb-2" type="email" name="Email" placeholder="新的邮箱号">
-      <button class="btn btn-info" type="submit">发送换绑验证码</button>
-    </form>
-  </div>
+        r#"<div class="form-grid">
+  {pass_card}
+  {email_card}
 </div>"#,
-        uid = user.uid,
-        email = html_escape(&user.email),
+        pass_card = ui::section_card(
+            "修改登陆密码",
+            "",
+            &format!(
+                r#"<form class="form-stack" method="post" action="/index/index/setting?type=RePass">
+  <label class="field"><span class="field-label">UID</span><input class="field-ro" readonly value="{uid}"></label>
+  <label class="field"><span class="field-label">绑定邮箱</span><input class="field-ro" readonly value="{email}"></label>
+  {pw}
+  {code}
+  {submit}
+</form>
+<form method="post" action="/index/index/setting?type=doEmail" style="margin-top:0.75rem">{send}</form>"#,
+                uid = user.uid,
+                email = ui::html_escape(&user.email),
+                pw = ui::field("新密码", "Password", "password", r#"placeholder="6~18 位新密码" required"#),
+                code = ui::field("邮箱验证码", "Email_Code", "text", r#"placeholder="6 位验证码" required"#),
+                submit = ui::filled_button("修改密码", ""),
+                send = ui::tonal_button("发送改密验证码", ""),
+            ),
+        ),
+        email_card = ui::section_card(
+            "修改邮箱绑定",
+            "",
+            &format!(
+                r#"<form class="form-stack" method="post" action="/index/index/setting?type=ReEmail">
+  <label class="field"><span class="field-label">当前邮箱</span><input class="field-ro" readonly value="{email}"></label>
+  {ne}
+  {code}
+  {submit}
+</form>
+<form class="form-stack" method="post" action="/index/index/setting?type=ReEmailCode" style="margin-top:0.75rem">
+  {ne2}
+  {send}
+</form>"#,
+                email = ui::html_escape(&user.email),
+                ne = ui::field("新邮箱", "Email", "email", r#"placeholder="新的邮箱号" required"#),
+                code = ui::field("邮箱验证码", "EmailCode", "text", r#"placeholder="6 位验证码" required"#),
+                submit = ui::filled_button("修改邮箱", ""),
+                ne2 = ui::field("新邮箱", "Email", "email", r#"placeholder="新的邮箱号" required"#),
+                send = ui::tonal_button("发送换绑验证码", ""),
+            ),
+        ),
     );
-    Html(layout("账号设置", &user, &apis, &body)).into_response()
+    Html(layout("账号设置", "setting", &user, &apis, None, &body)).into_response()
 }
 
 pub async fn appkey(
@@ -210,21 +253,25 @@ pub async fn appkey(
     }
 
     let status = if user.code > 0 { "正常" } else { "异常" };
-    let body = format!(
-        r#"<h1>APPKEY</h1>
-<form method="post" action="/index/index/appkey?type=APPKEY">
-  <div class="form-group"><label>APPID</label><input class="form-control" readonly value="{uid}"></div>
-  <div class="form-group"><label>用户名</label><input class="form-control" readonly value="{username}"></div>
-  <div class="form-group"><label>APPKEY</label><input class="form-control" readonly value="{appkey}"></div>
-  <div class="form-group"><label>APPID状态</label><input class="form-control" readonly value="{status}"></div>
-  <button class="btn btn-dark" type="submit">重置</button>
+    let body = ui::section_card(
+        "应用凭证",
+        "",
+        &format!(
+            r#"<form class="form-stack" method="post" action="/index/index/appkey?type=APPKEY">
+  <label class="field"><span class="field-label">APPID</span><input class="field-ro" readonly value="{uid}"></label>
+  <label class="field"><span class="field-label">用户名</span><input class="field-ro" readonly value="{username}"></label>
+  <label class="field"><span class="field-label">APPKEY</span><input class="field-ro" readonly value="{appkey}"></label>
+  <label class="field"><span class="field-label">状态</span><input class="field-ro" readonly value="{status}"></label>
+  <div class="split-actions">{reset}</div>
 </form>"#,
-        uid = user.uid,
-        username = html_escape(&user.username),
-        appkey = html_escape(&user.appkey),
-        status = status,
+            uid = user.uid,
+            username = ui::html_escape(&user.username),
+            appkey = ui::html_escape(&user.appkey),
+            status = status,
+            reset = ui::filled_button("重置 APPKEY", ""),
+        ),
     );
-    Html(layout("APPKEY", &user, &apis, &body)).into_response()
+    Html(layout("APPKEY", "appkey", &user, &apis, None, &body)).into_response()
 }
 
 pub async fn login_out(session: Session, jar: CookieJar) -> Response {
@@ -597,32 +644,98 @@ async fn reset_email(
     }
 }
 
+fn week_chart(stats: &Stats) -> String {
+    let labels = serde_json::to_string(&["6天前", "5天前", "4天前", "3天前", "前天", "昨天", "今天"])
+        .unwrap_or_else(|_| "[]".into());
+    let data = serde_json::to_string(&[
+        stats.day6,
+        stats.day5,
+        stats.day4,
+        stats.day3,
+        stats.day2,
+        stats.yesterday,
+        stats.today,
+    ])
+    .unwrap_or_else(|_| "[]".into());
+    ui::section_card(
+        "近七天调用",
+        &format!(
+            r#"<a class="btn btn-tonal" href="javascript:location.reload()">{}刷新</a>"#,
+            ui::icon("refresh")
+        ),
+        &ui::chart_block("revenue-chart", &labels, &data),
+    )
+}
+
 fn stat_cards(stats: &Stats) -> String {
-    let today_to = ratio(stats.today, stats.yesterday);
-    let week_to = ratio(stats.week, stats.lastweek);
-    let month_to = ratio(stats.month, stats.lastmonth);
-    let security_to = ratio(stats.security_count, stats.count);
+    let today_to = signed_ratio(stats.today, stats.yesterday);
+    let week_to = signed_ratio(stats.week, stats.lastweek);
+    let month_to = signed_ratio(stats.month, stats.lastmonth);
+    let security_to = if stats.count > 0 {
+        stats.security_count as f64 / stats.count as f64 * 100.0
+    } else {
+        0.0
+    };
     [
-        ("今天调用", stats.today, format!("相对昨天 {today_to:.2}%")),
-        ("昨天调用", stats.yesterday, format!("近七天: {}, {}, {}, {}, {}, {}", stats.day2, stats.day3, stats.day4, stats.day5, stats.day6, stats.yesterday)),
-        ("本周调用", stats.week, format!("上周 {} / {week_to:.2}%", stats.lastweek)),
-        ("本月调用", stats.month, format!("上月 {} / {month_to:.2}%", stats.lastmonth)),
-        ("总调用", stats.count, format!("拦截恶意 {}", stats.security_count)),
-        ("拦截占比", stats.security_count, format!("{security_to:.2}%")),
+        (
+            "今天调用",
+            stats.today,
+            format!("相对昨天"),
+            ui::trend_chip(today_to, true),
+        ),
+        (
+            "昨天调用",
+            stats.yesterday,
+            format!(
+                "近六日 {}, {}, {}, {}, {}, {}",
+                stats.day2, stats.day3, stats.day4, stats.day5, stats.day6, stats.yesterday
+            ),
+            String::new(),
+        ),
+        (
+            "本周调用",
+            stats.week,
+            format!("上周 {}", stats.lastweek),
+            ui::trend_chip(week_to, true),
+        ),
+        (
+            "本月调用",
+            stats.month,
+            format!("上月 {}", stats.lastmonth),
+            ui::trend_chip(month_to, true),
+        ),
+        (
+            "总调用",
+            stats.count,
+            format!("拦截恶意 {}", stats.security_count),
+            String::new(),
+        ),
+        (
+            "拦截占比",
+            stats.security_count,
+            format!("{security_to:.2}% of total"),
+            String::new(),
+        ),
     ]
     .iter()
-    .map(|(title, value, note)| {
-        format!(
-            r#"<div class="col-md-4"><div class="card mb-3"><div class="card-body"><h5>{}</h5><h3>{}</h3><p class="text-muted">{}</p></div></div></div>"#,
-            html_escape(title),
-            value,
-            html_escape(note)
-        )
-    })
+    .map(|(title, value, note, extra)| ui::stat_card(title, *value, note, extra))
     .collect::<Vec<_>>()
     .join("")
 }
 
+fn signed_ratio(a: i64, b: i64) -> f64 {
+    if b == 0 {
+        if a > 0 {
+            100.0
+        } else {
+            0.0
+        }
+    } else {
+        (a - b) as f64 / b as f64 * 100.0
+    }
+}
+
+#[allow(dead_code)]
 fn ratio(a: i64, b: i64) -> f64 {
     if a > 0 && b > 0 {
         if a < b {
@@ -639,19 +752,19 @@ fn request_table(rows: &[MySqlRow]) -> String {
     let trs = rows
         .iter()
         .map(|row| {
+            let ip = get_string(row, "IP").unwrap_or_default();
             format!(
-                "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
-                html_escape(&format_ts(get_i64(row, "TIME").unwrap_or_default())),
-                html_escape(&get_string(row, "Request").unwrap_or_default()),
-                html_escape(&get_string(row, "IP").unwrap_or_default()),
-                html_escape(&get_string(row, "UserAgent").unwrap_or_default()),
+                r#"<tr><td>{}</td><td><a href="javascript:void(0)" onclick="fetch('/index/index/ip?address={}').then(r=>r.json()).then(d=>alert(JSON.stringify(d,null,2)))">{}</a></td><td>{}</td><td>{}</td></tr>"#,
+                ui::html_escape(&format_ts(get_i64(row, "TIME").unwrap_or_default())),
+                urlencoding::encode(&ip),
+                ui::html_escape(&ip),
+                ui::html_escape(&get_string(row, "UserAgent").unwrap_or_default()),
+                ui::html_escape(&get_string(row, "Request").unwrap_or_default()),
             )
         })
         .collect::<Vec<_>>()
         .join("");
-    format!(
-        r#"<table class="table table-striped"><thead><tr><th>时间</th><th>方式</th><th>IP</th><th>UserAgent</th></tr></thead><tbody>{trs}</tbody></table>"#
-    )
+    ui::data_table(&["时间", "IP", "UserAgent", "方式"], &trs)
 }
 
 fn request_row_json(row: &MySqlRow) -> Value {
@@ -677,72 +790,42 @@ fn action_table(raw: &str) -> String {
                 .cloned()
                 .unwrap_or_default()
                 .iter()
-                .map(|cell| format!("<td>{}</td>", html_escape(&value_to_string(cell))))
+                .map(|cell| format!("<td>{}</td>", ui::html_escape(&value_to_string(cell))))
                 .collect::<Vec<_>>()
                 .join("");
             format!("<tr>{cells}</tr>")
         })
         .collect::<Vec<_>>()
         .join("");
-    format!(r#"<table class="table table-bordered"><tbody>{rows}</tbody></table>"#)
+    format!(r#"<div class="table-wrap"><table class="data-table"><tbody>{rows}</tbody></table></div>"#)
 }
 
-fn layout(title: &str, user: &UserView, apis: &[ApiView], body: &str) -> String {
+fn layout(
+    title: &str,
+    active: &str,
+    user: &UserView,
+    apis: &[ApiView],
+    active_api: Option<&str>,
+    body: &str,
+) -> String {
     let api_links = apis
         .iter()
-        .map(|api| {
-            format!(
-                r#"<a class="dropdown-item" href="/index/index/page?api={}">{}</a>"#,
-                urlencoding::encode(&api.keyword),
-                html_escape(&api.name)
-            )
-        })
+        .map(|api| ui::api_nav_link(&api.keyword, &api.name, active_api))
         .collect::<Vec<_>>()
         .join("");
-    let headimg = headimg(&user.email);
-    format!(
-        r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{title} - 梦城API</title>
-  <link rel="shortcut icon" href="https://cdn.gqink.cn/blog/favicon.ico">
-  <link href="https://cdn.gqink.cn/var2/css/app.min.css" rel="stylesheet" type="text/css">
-</head>
-<body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-primary">
-  <a class="navbar-brand" href="/index/index/index">梦城API</a>
-  <div class="navbar-nav">
-    <a class="nav-item nav-link" href="/index/index/index">控制中心</a>
-    <a class="nav-item nav-link" href="/index/index/appkey">APPKEY</a>
-    <a class="nav-item nav-link" href="/index/index/setting">账号设置</a>
-    <a class="nav-item nav-link" href="/index/index/LoginOut">退出登录</a>
-  </div>
-</nav>
-<main class="container-fluid mt-4">
-  <div class="media mb-3"><img src="{headimg}" class="mr-3 rounded" width="50" height="50" alt=""><div class="media-body"><strong>{username}</strong><br><small>{email}</small></div></div>
-  <div class="mb-3">{api_links}</div>
-  {body}
-</main>
-<script src="https://cdn.gqink.cn/var2/javascript/app.min.js"></script>
-<script src="https://cdn.gqink.cn/sweetalert/sweetalert/sweetalert.min.js"></script>
-</body>
-</html>"#,
-        title = html_escape(title),
-        headimg = html_escape(&headimg),
-        username = html_escape(&user.username),
-        email = html_escape(&user.email),
-        api_links = api_links,
-        body = body,
+    ui::app_layout(
+        title,
+        &user.username,
+        &user.email,
+        &headimg(&user.email),
+        active,
+        &api_links,
+        body,
     )
 }
 
 fn simple_error(msg: &str) -> String {
-    format!(
-        r#"<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>错误</title><body><h1>{}</h1><p><a href="/index/index/index">返回控制中心</a></p></body></html>"#,
-        html_escape(msg)
-    )
+    ui::error_page(msg)
 }
 
 fn support_text(value: Option<&String>) -> &'static str {
@@ -805,13 +888,4 @@ fn format_ts(ts: i64) -> String {
         .single()
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_default()
-}
-
-fn html_escape(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }

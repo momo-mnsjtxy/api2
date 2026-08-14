@@ -18,7 +18,7 @@ pub async fn index(session: Session, jar: CookieJar) -> Response {
     if auth::current_user(&session, &jar).await.is_some() {
         return Redirect::to("/index/index/index").into_response();
     }
-    Html(LOGIN_HTML).into_response()
+    Html(login_html()).into_response()
 }
 
 pub async fn gt_code(
@@ -116,44 +116,31 @@ fn trimmed(form: &FormData, key: &str) -> String {
         .unwrap_or_default()
 }
 
-const LOGIN_HTML: &str = r#"<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>账号登陆 - 梦城API</title>
-  <link rel="shortcut icon" href="https://cdn.gqink.cn/blog/favicon.ico">
-  <link href="https://cdn.gqink.cn/var2/css/app.min.css" rel="stylesheet" type="text/css">
-</head>
-<body class="authentication-bg">
-  <main class="container" style="max-width:520px;margin-top:5rem">
-    <div class="card">
-      <div class="card-header text-center bg-primary">
-        <img src="https://cdn.gqink.cn/blog/logo.svg" alt="梦城API" height="48">
-      </div>
-      <div class="card-body">
-        <h3 class="text-center">账号登录</h3>
-        <p class="text-muted text-center">输入您的账号密码来访问控制面板</p>
-        <form method="post" action="/login/index/callback">
-          <input type="hidden" name="geetest_challenge" value="rust-fallback">
-          <input type="hidden" name="geetest_validate" value="d22957a63a507af42dc95a259d8bc8f5">
-          <input type="hidden" name="geetest_seccode" value="rust-fallback">
-          <div class="form-group mb-3">
-            <label>邮箱或用户名</label>
-            <input class="form-control" name="UserName" autocomplete="username" required>
-          </div>
-          <div class="form-group mb-3">
-            <label>密码</label>
-            <input class="form-control" type="password" name="Password" autocomplete="current-password" required>
-          </div>
-          <button class="btn btn-primary btn-block" type="submit">登陆</button>
-        </form>
-        <p class="text-center mt-3">还没有账户? <a href="/register/index/index">注册</a></p>
-      </div>
-    </div>
-  </main>
-  <footer class="footer footer-alt">2020 © 梦城 - www.gqink.cn</footer>
-  <script src="https://cdn.gqink.cn/var2/javascript/app.min.js"></script>
-  <script src="https://cdn.gqink.cn/blog/New/js/gt.js"></script>
-</body>
-</html>"#;
+fn login_html() -> String {
+    use super::ui;
+    let panel = format!(
+        r#"<h2 class="panel-title">欢迎回来</h2>
+<p class="panel-sub">登录后管理接口调用与 APPKEY</p>
+<form class="form-stack" method="post" action="/login/index/callback">
+  {gt}
+  {user}
+  {pass}
+  <button class="btn btn-filled btn-block" type="submit">登陆</button>
+</form>
+<p class="auth-links">还没有账户？ <a href="/register/index/index">立即注册</a></p>"#,
+        gt = ui::geetest_hidden(),
+        user = ui::field(
+            "邮箱或用户名",
+            "UserName",
+            "text",
+            r#"autocomplete="username" required"#
+        ),
+        pass = ui::field(
+            "密码",
+            "Password",
+            "password",
+            r#"autocomplete="current-password" required"#
+        ),
+    );
+    ui::auth_layout("账号登陆", &panel)
+}
