@@ -56,6 +56,7 @@ pub fn app_layout(
       </a>
       <nav class="rail-nav">
         <a class="rail-item {a_home}" href="/index/index/index">{ih}控制中心</a>
+        <a class="rail-item {a_log}" href="/index/index/log">{il}调用日志</a>
         <a class="rail-item {a_key}" href="/index/index/appkey">{ik}APPKEY</a>
         <a class="rail-item {a_set}" href="/index/index/setting">{is}账号设置</a>
       </nav>
@@ -92,6 +93,7 @@ pub fn app_layout(
         api_links = api_links,
         body = body,
         a_home = if active == "home" { "is-active" } else { "" },
+        a_log = if active == "log" { "is-active" } else { "" },
         a_key = if active == "appkey" { "is-active" } else { "" },
         a_set = if active == "setting" {
             "is-active"
@@ -99,6 +101,7 @@ pub fn app_layout(
             ""
         },
         ih = icon("dashboard"),
+        il = icon("receipt_long"),
         ik = icon("key"),
         is = icon("manage_accounts"),
         io = icon("logout"),
@@ -659,6 +662,131 @@ a:hover { text-decoration: underline; }
 .support-ok { color: var(--md-sys-color-success); font-weight: 700; }
 .support-no { color: var(--md-sys-color-outline); }
 .lead { margin: 0; color: var(--md-sys-color-on-surface-variant); max-width: 62ch; }
+.cred-bar { padding: 1.2rem 1.3rem 1.25rem; }
+.cred-main { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; }
+.cred-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+.copy-row { display: flex; gap: 0.5rem; align-items: stretch; }
+.copy-row .field-ro { flex: 1; }
+.dash-split {
+  display: grid;
+  grid-template-columns: 1.35fr 0.9fr;
+  gap: 1rem;
+}
+.dash-tri {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+.stack-gap { display: flex; flex-direction: column; gap: 1rem; }
+.chart-box-sm { height: 220px; }
+.rank-row { margin-bottom: 0.75rem; }
+.rank-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.3rem;
+}
+.rank-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--md-sys-color-surface-container-high);
+  overflow: hidden;
+}
+.rank-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #006A6A, #4B607C);
+}
+.sec-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid var(--md-sys-color-outline-variant);
+}
+.sec-row:last-child { border-bottom: none; }
+.api-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+.api-card {
+  display: block;
+  padding: 1rem 1.05rem;
+  color: inherit;
+  text-decoration: none !important;
+  transition: transform 160ms ease, box-shadow 160ms ease;
+}
+.api-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(22, 29, 29, 0.07);
+}
+.api-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.45rem;
+}
+.api-card p {
+  margin: 0 0 0.65rem;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.88rem;
+  min-height: 2.4em;
+}
+.api-card code {
+  font-size: 0.78rem;
+  color: var(--md-sys-color-primary);
+}
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+.play-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 0.8fr;
+  gap: 0.85rem;
+}
+.play-out {
+  margin: 0;
+  padding: 1rem;
+  border-radius: var(--md-sys-shape-md);
+  background: #0f1717;
+  color: #d7efec;
+  min-height: 160px;
+  overflow: auto;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+.ua-cell {
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.9rem;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85em;
+}
 .m3-auth {
   min-height: 100vh;
   display: flex;
@@ -756,7 +884,7 @@ a:hover { text-decoration: underline; }
   .rail-nav { flex-direction: row; flex-wrap: wrap; }
   .rail-apis { display: none; }
   .rail-out { margin-top: 0; }
-  .stat-grid, .form-grid, .support-grid { grid-template-columns: 1fr; }
+  .stat-grid, .form-grid, .support-grid, .cred-grid, .dash-split, .dash-tri, .api-grid, .play-grid { grid-template-columns: 1fr; }
   .auth-stage { grid-template-columns: 1fr; padding-top: 2rem; }
   .auth-brand { text-align: center; }
   .auth-logo { margin-left: auto; margin-right: auto; }

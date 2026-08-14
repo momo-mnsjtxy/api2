@@ -26,6 +26,7 @@ struct UserView {
     email: String,
     appkey: String,
     code: i64,
+    add_time: i64,
 }
 
 #[derive(Clone, Debug)]
@@ -52,24 +53,39 @@ pub async fn index(State(state): State<AppState>, session: Session, jar: CookieJ
         Err(resp) => return resp,
     };
     let stats = dashboard_stats(&state.pool, user.uid, None).await;
-    let recent = recent_requests(&state.pool, user.uid, None, 30, 0)
+    let (week_start, week_end) = util::range_this_week();
+    let (today_start, today_end) = util::range_today();
+    let top_apis = ranked_keywords(&state.pool, user.uid, week_start, week_end, 8)
         .await
         .unwrap_or_default();
-    let body = format!(
-        r#"<div class="stat-grid">{cards}</div>
-{chart}
-{recent}
-"#,
-        cards = stat_cards(&stats),
-        chart = week_chart(&stats),
-        recent = ui::section_card(
-            "最近 30 次调用",
-            &format!(
-                r#"<a class="btn btn-tonal" href="javascript:location.reload()">{}刷新</a>"#,
-                ui::icon("refresh")
-            ),
-            &request_table(&recent),
-        ),
+    let top_ips = ranked_ips(&state.pool, user.uid, week_start, week_end, 8)
+        .await
+        .unwrap_or_default();
+    let methods = method_breakdown(&state.pool, user.uid, week_start, week_end)
+        .await
+        .unwrap_or_default();
+    let hourly = hourly_today(&state.pool, user.uid, today_start, today_end)
+        .await
+        .unwrap_or_else(|_| vec![0; 24]);
+    let security = recent_security(&state.pool, user.uid, 12)
+        .await
+        .unwrap_or_default();
+    let recent = recent_requests(&state.pool, user.uid, None, 50, 0)
+        .await
+        .unwrap_or_default();
+    let base = public_base(&state);
+    let body = home_body(
+        &state,
+        &user,
+        &apis,
+        &stats,
+        &top_apis,
+        &top_ips,
+        &methods,
+        &hourly,
+        &security,
+        &recent,
+        &base,
     );
     Html(layout("控制中心", "home", &user, &apis, None, &body)).into_response()
 }
@@ -129,25 +145,55 @@ pub async fn page(
         pt = support_text(api.raw.get("post")),
         ut = support_text(api.raw.get("put")),
     );
+    let base = public_base(&state);
+    let endpoint = format!(
+        "{base}/api/v2/{kw}?appid={uid}&appkey={key}",
+        base = base.trim_end_matches('/'),
+        kw = api.keyword,
+        uid = user.uid,
+        key = user.appkey,
+    );
+    let endpoint_card = ui::section_card(
+        "接口地址",
+        &format!(
+            r#"<button type="button" class="btn btn-tonal" onclick="navigator.clipboard.writeText(document.getElementById('ep-url').value)">{}复制</button>"#,
+            ui::icon("content_copy")
+        ),
+        &format!(
+            r#"<label class="field"><span class="field-label">GET 示例</span>
+<input class="field-ro" id="ep-url" readonly value="{ep}"></label>
+<p class="stat-note">POST / PUT 请将参数放在 Body；返回格式可用 type=json|xml</p>"#,
+            ep = ui::html_escape(&endpoint),
+        ),
+    );
+    let try_panel = playground_panel(&apis, &user, &base, Some(&api.keyword));
     let body = format!(
         r#"<p class="lead">{des}</p>
 <div class="stat-grid">{cards}</div>
 {methods}
+{endpoint}
 {params}
+{try_panel}
 {chart}
-<p>{json_btn}</p>
+<p class="split-actions">{json_btn}{logs_btn}</p>
 "#,
         des = ui::html_escape(&api.des),
         cards = stat_cards(&stats),
         methods = ui::section_card("请求方式", "", &methods_inner),
+        endpoint = endpoint_card,
         params = ui::section_card("参数说明", "", &params_table),
+        try_panel = try_panel,
         chart = week_chart(&stats),
         json_btn = ui::outlined_button_link(
-            "查看 JSON 调用列表",
+            "JSON 调用列表",
             &format!(
                 "/index/index/page?api={}&type=list",
                 urlencoding::encode(&api.keyword)
             ),
+        ),
+        logs_btn = ui::outlined_button_link(
+            "完整日志",
+            &format!("/index/index/log?kw={}", urlencoding::encode(&api.keyword)),
         ),
     );
     Html(layout(&api.name, "page", &user, &apis, Some(&api.keyword), &body)).into_response()
@@ -314,8 +360,59 @@ pub async fn ip(
     Json(json!({"code": 400, "msg": "内部错误"})).into_response()
 }
 
-pub async fn log() -> Response {
-    Html("开发中").into_response()
+pub async fn log(
+    State(state): State<AppState>,
+    session: Session,
+    jar: CookieJar,
+    Query(params): Query<Params>,
+) -> Response {
+    let (user, apis) = match page_context(&state, &session, &jar).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+    let p = params
+        .get("p")
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(1);
+    let kw = params.get("kw").map(String::as_str).filter(|s| !s.is_empty());
+    let total = count_requests(&state.pool, user.uid, kw, None, None)
+        .await
+        .unwrap_or(0);
+    let rows = recent_requests(&state.pool, user.uid, kw, 40, (p - 1) * 40)
+        .await
+        .unwrap_or_default();
+    let pages = ((total + 39) / 40).max(1);
+    let filter = format!(
+        r#"<form class="toolbar" method="get" action="/index/index/log">
+  <input class="field-input" style="max-width:220px" name="kw" value="{kw}" placeholder="按接口 Keyword 筛选">
+  <button class="btn btn-tonal" type="submit">{icon}筛选</button>
+  <a class="btn btn-outlined" href="/index/index/log">全部</a>
+</form>"#,
+        kw = ui::html_escape(kw.unwrap_or("")),
+        icon = ui::icon("filter_alt"),
+    );
+    let pager = format!(
+        r#"<div class="pager">第 {p} / {pages} 页 · 共 {total} 条
+  <a class="btn btn-outlined" href="/index/index/log?p={prev}{kwq}">上一页</a>
+  <a class="btn btn-outlined" href="/index/index/log?p={next}{kwq}">下一页</a>
+</div>"#,
+        p = p,
+        pages = pages,
+        total = total,
+        prev = (p - 1).max(1),
+        next = (p + 1).min(pages),
+        kwq = kw
+            .map(|k| format!("&kw={}", urlencoding::encode(k)))
+            .unwrap_or_default(),
+    );
+    let body = format!(
+        "{filter}{table}{pager}",
+        filter = filter,
+        table = ui::section_card("调用日志", "", &request_table_full(&rows)),
+        pager = pager,
+    );
+    Html(layout("调用日志", "log", &user, &apis, None, &body)).into_response()
 }
 
 async fn page_context(
@@ -335,6 +432,7 @@ async fn page_context(
             email: auth_user.email,
             appkey: String::new(),
             code: 0,
+            add_time: 0,
         });
     let apis = load_apis(&state.pool).await.unwrap_or_default();
     Ok((user, apis))
@@ -342,7 +440,7 @@ async fn page_context(
 
 async fn load_user(pool: &MySqlPool, uid: i64, username: &str) -> sqlx::Result<Option<UserView>> {
     let row = sqlx::query(
-        "SELECT UID, UserName, Email, APPKEY, Code FROM user WHERE UID=? AND UserName=? LIMIT 1",
+        "SELECT UID, UserName, Email, APPKEY, Code, AddTime FROM user WHERE UID=? AND UserName=? LIMIT 1",
     )
     .bind(uid)
     .bind(username)
@@ -354,6 +452,7 @@ async fn load_user(pool: &MySqlPool, uid: i64, username: &str) -> sqlx::Result<O
         email: get_string(&row, "Email").unwrap_or_default(),
         appkey: get_string(&row, "APPKEY").unwrap_or_default(),
         code: get_i64(&row, "Code").unwrap_or_default(),
+        add_time: get_i64(&row, "AddTime").unwrap_or_default(),
     }))
 }
 
@@ -643,6 +742,568 @@ async fn reset_email(
         Json(json!({"code": 400, "msg": "抱歉！修改失败。请重试"})).into_response()
     }
 }
+
+
+fn public_base(state: &AppState) -> String {
+    if state.config.app_url.trim().is_empty() {
+        "http://127.0.0.1:8080".into()
+    } else {
+        state.config.app_url.trim_end_matches('/').to_string()
+    }
+}
+
+#[derive(Clone)]
+struct RankRow {
+    key: String,
+    count: i64,
+}
+
+async fn ranked_keywords(
+    pool: &MySqlPool,
+    uid: i64,
+    start: i64,
+    end: i64,
+    limit: i64,
+) -> sqlx::Result<Vec<RankRow>> {
+    let rows = sqlx::query(
+        "SELECT Keyword AS k, COUNT(*) AS c FROM request WHERE UID=? AND TIME BETWEEN ? AND ? AND Keyword IS NOT NULL AND Keyword<>'' GROUP BY Keyword ORDER BY c DESC LIMIT ?",
+    )
+    .bind(uid)
+    .bind(start)
+    .bind(end)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| RankRow {
+            key: get_string(r, "k").unwrap_or_default(),
+            count: get_i64(r, "c").unwrap_or(0),
+        })
+        .collect())
+}
+
+async fn ranked_ips(
+    pool: &MySqlPool,
+    uid: i64,
+    start: i64,
+    end: i64,
+    limit: i64,
+) -> sqlx::Result<Vec<RankRow>> {
+    let rows = sqlx::query(
+        "SELECT IP AS k, COUNT(*) AS c FROM request WHERE UID=? AND TIME BETWEEN ? AND ? AND IP IS NOT NULL AND IP<>'' GROUP BY IP ORDER BY c DESC LIMIT ?",
+    )
+    .bind(uid)
+    .bind(start)
+    .bind(end)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| RankRow {
+            key: get_string(r, "k").unwrap_or_default(),
+            count: get_i64(r, "c").unwrap_or(0),
+        })
+        .collect())
+}
+
+async fn method_breakdown(
+    pool: &MySqlPool,
+    uid: i64,
+    start: i64,
+    end: i64,
+) -> sqlx::Result<Vec<RankRow>> {
+    let rows = sqlx::query(
+        "SELECT Request AS k, COUNT(*) AS c FROM request WHERE UID=? AND TIME BETWEEN ? AND ? GROUP BY Request ORDER BY c DESC",
+    )
+    .bind(uid)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| RankRow {
+            key: get_string(r, "k").unwrap_or_else(|| "UNKNOWN".into()),
+            count: get_i64(r, "c").unwrap_or(0),
+        })
+        .collect())
+}
+
+async fn hourly_today(
+    pool: &MySqlPool,
+    uid: i64,
+    start: i64,
+    end: i64,
+) -> sqlx::Result<Vec<i64>> {
+    let rows = sqlx::query(
+        "SELECT HOUR(FROM_UNIXTIME(TIME)) AS h, COUNT(*) AS c FROM request WHERE UID=? AND TIME BETWEEN ? AND ? GROUP BY h",
+    )
+    .bind(uid)
+    .bind(start)
+    .bind(end)
+    .fetch_all(pool)
+    .await?;
+    let mut out = vec![0_i64; 24];
+    for r in rows {
+        let h = get_i64(&r, "h").unwrap_or(0).clamp(0, 23) as usize;
+        out[h] = get_i64(&r, "c").unwrap_or(0);
+    }
+    Ok(out)
+}
+
+async fn recent_security(pool: &MySqlPool, uid: i64, limit: i64) -> sqlx::Result<Vec<MySqlRow>> {
+    sqlx::query(
+        "SELECT TIME, UserAgent, IP, Request, Keyword, Code FROM request WHERE UID=? AND Code=1 ORDER BY id DESC LIMIT ?",
+    )
+    .bind(uid)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+}
+
+fn home_body(
+    _state: &AppState,
+    user: &UserView,
+    apis: &[ApiView],
+    stats: &Stats,
+    top_apis: &[RankRow],
+    top_ips: &[RankRow],
+    methods: &[RankRow],
+    hourly: &[i64],
+    security: &[MySqlRow],
+    recent: &[MySqlRow],
+    base: &str,
+) -> String {
+    let cred = credentials_bar(user, base, apis.len());
+    let cards = format!(r#"<div class="stat-grid">{}</div>"#, stat_cards(stats));
+    let charts = format!(
+        r#"<div class="dash-split">
+  <div>{week}</div>
+  <div class="stack-gap">
+    {methods}
+    {hourly}
+  </div>
+</div>"#,
+        week = week_chart(stats),
+        methods = methods_chart(methods),
+        hourly = hourly_chart(hourly),
+    );
+    let ranks = format!(
+        r#"<div class="dash-tri">
+  {apis}
+  {ips}
+  {sec}
+</div>"#,
+        apis = rank_card("本周热门接口", top_apis, true),
+        ips = rank_card("本周来源 IP", top_ips, false),
+        sec = security_card(security),
+    );
+    let catalog = api_catalog(apis, top_apis);
+    let play = playground_panel(apis, user, base, None);
+    let logs = ui::section_card(
+        "最近调用明细",
+        &format!(
+            r#"<div class="split-actions">
+  <input class="field-input" id="log-filter" style="max-width:200px" placeholder="筛选接口/IP/UA" oninput="filterLogs()">
+  <button type="button" class="btn btn-tonal" onclick="exportLogs()">{}导出 JSON</button>
+  <a class="btn btn-outlined" href="/index/index/log">{}全部日志</a>
+</div>"#,
+            ui::icon("download"),
+            ui::icon("list_alt"),
+        ),
+        &request_table_full(recent),
+    );
+    format!(
+        "{cred}{cards}{charts}{ranks}{catalog}{play}{logs}{script}",
+        cred = cred,
+        cards = cards,
+        charts = charts,
+        ranks = ranks,
+        catalog = catalog,
+        play = play,
+        logs = logs,
+        script = DASH_SCRIPT,
+    )
+}
+
+fn credentials_bar(user: &UserView, base: &str, api_count: usize) -> String {
+    let status = if user.code > 0 { "正常" } else { "异常" };
+    let status_cls = if user.code > 0 { "chip-good" } else { "chip-warn" };
+    format!(
+        r#"<section class="cred-bar surface-card">
+  <div class="cred-main">
+    <div>
+      <p class="eyebrow">账户凭证</p>
+      <h2 class="section-title" style="margin:0.2rem 0 0">你好，{name}</h2>
+      <p class="stat-note">注册于 {reg} · 可用接口 {n} 个 · API Base <code>{base}/api/v2</code></p>
+    </div>
+    <span class="chip {status_cls}">{status}</span>
+  </div>
+  <div class="cred-grid">
+    <label class="field"><span class="field-label">APPID</span>
+      <div class="copy-row"><input class="field-ro" id="cred-appid" readonly value="{uid}"><button type="button" class="btn btn-tonal" onclick="navigator.clipboard.writeText(document.getElementById('cred-appid').value)">复制</button></div>
+    </label>
+    <label class="field"><span class="field-label">APPKEY</span>
+      <div class="copy-row"><input class="field-ro" id="cred-appkey" readonly value="{key}"><button type="button" class="btn btn-tonal" onclick="navigator.clipboard.writeText(document.getElementById('cred-appkey').value)">复制</button></div>
+    </label>
+    <label class="field"><span class="field-label">邮箱</span>
+      <input class="field-ro" readonly value="{email}">
+    </label>
+  </div>
+  <div class="split-actions" style="margin-top:0.85rem">
+    <a class="btn btn-filled" href="/index/index/appkey">{ik}管理 APPKEY</a>
+    <a class="btn btn-tonal" href="/index/index/setting">{is}账号设置</a>
+    <a class="btn btn-outlined" href="/index/index/log">{il}调用日志</a>
+  </div>
+</section>"#,
+        name = ui::html_escape(&user.username),
+        reg = ui::html_escape(&format_ts(user.add_time)),
+        n = api_count,
+        base = ui::html_escape(base.trim_end_matches('/')),
+        status_cls = status_cls,
+        status = status,
+        uid = user.uid,
+        key = ui::html_escape(&user.appkey),
+        email = ui::html_escape(&user.email),
+        ik = ui::icon("key"),
+        is = ui::icon("manage_accounts"),
+        il = ui::icon("receipt_long"),
+    )
+}
+
+fn rank_card(title: &str, rows: &[RankRow], is_api: bool) -> String {
+    let max = rows.iter().map(|r| r.count).max().unwrap_or(1).max(1);
+    let list = if rows.is_empty() {
+        r#"<p class="stat-note">暂无数据，调用接口后会出现排行。</p>"#.to_string()
+    } else {
+        rows.iter()
+            .map(|r| {
+                let pct = (r.count as f64 / max as f64 * 100.0).round();
+                let label = if is_api {
+                    format!(
+                        r#"<a href="/index/index/page?api={kw}">{name}</a>"#,
+                        kw = urlencoding::encode(&r.key),
+                        name = ui::html_escape(&r.key),
+                    )
+                } else {
+                    format!(
+                        r#"<a href="javascript:void(0)" onclick="lookupIp('{ip}')">{ip}</a>"#,
+                        ip = ui::html_escape(&r.key),
+                    )
+                };
+                format!(
+                    r#"<div class="rank-row">
+  <div class="rank-meta"><span>{label}</span><strong>{c}</strong></div>
+  <div class="rank-bar"><span style="width:{pct}%"></span></div>
+</div>"#,
+                    label = label,
+                    c = r.count,
+                    pct = pct,
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    ui::section_card(title, "", &list)
+}
+
+fn security_card(rows: &[MySqlRow]) -> String {
+    let list = if rows.is_empty() {
+        r#"<p class="stat-note">近期没有拦截记录，状态良好。</p>"#.to_string()
+    } else {
+        rows.iter()
+            .map(|r| {
+                format!(
+                    r#"<div class="sec-row">
+  <div><strong>{kw}</strong> · {ip}<br><span class="stat-note">{ts} · {method}</span></div>
+  <span class="chip chip-warn">拦截</span>
+</div>"#,
+                    kw = ui::html_escape(&get_string(r, "Keyword").unwrap_or_default()),
+                    ip = ui::html_escape(&get_string(r, "IP").unwrap_or_default()),
+                    ts = ui::html_escape(&format_ts(get_i64(r, "TIME").unwrap_or_default())),
+                    method = ui::html_escape(&get_string(r, "Request").unwrap_or_default()),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+    ui::section_card("安全拦截", &ui::outlined_button_link("日志", "/index/index/log"), &list)
+}
+
+fn api_catalog(apis: &[ApiView], top: &[RankRow]) -> String {
+    let counts: std::collections::HashMap<&str, i64> =
+        top.iter().map(|r| (r.key.as_str(), r.count)).collect();
+    let cards = apis
+        .iter()
+        .map(|api| {
+            let c = counts.get(api.keyword.as_str()).copied().unwrap_or(0);
+            format!(
+                r#"<a class="api-card surface-card" data-name="{name}" data-kw="{kw}" href="/index/index/page?api={kw}">
+  <div class="api-card-top"><strong>{name}</strong><span class="chip">{c} 次/周</span></div>
+  <p>{des}</p>
+  <code>/api/v2/{kw}</code>
+</a>"#,
+                name = ui::html_escape(&api.name),
+                kw = urlencoding::encode(&api.keyword),
+                des = ui::html_escape(&api.des),
+                c = c,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let inner = format!(
+        r#"<div class="toolbar">
+  <input class="field-input" id="api-search" placeholder="搜索接口名称 / Keyword" oninput="filterApis()">
+  <span class="stat-note" id="api-count">{n} 个接口</span>
+</div>
+<div class="api-grid" id="api-grid">{cards}</div>"#,
+        n = apis.len(),
+        cards = cards,
+    );
+    ui::section_card("接口目录", "", &inner)
+}
+
+fn playground_panel(apis: &[ApiView], user: &UserView, base: &str, selected: Option<&str>) -> String {
+    let options = apis
+        .iter()
+        .map(|a| {
+            let sel = if selected == Some(a.keyword.as_str()) {
+                " selected"
+            } else {
+                ""
+            };
+            format!(
+                r#"<option value="{kw}"{sel}>{name} ({kw})</option>"#,
+                kw = ui::html_escape(&a.keyword),
+                name = ui::html_escape(&a.name),
+                sel = sel,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let inner = format!(
+        r#"<div class="play-grid">
+  <label class="field"><span class="field-label">接口</span>
+    <select class="field-input" id="play-api">{options}</select>
+  </label>
+  <label class="field"><span class="field-label">方法</span>
+    <select class="field-input" id="play-method"><option>GET</option><option>POST</option></select>
+  </label>
+  <label class="field" style="grid-column:1/-1"><span class="field-label">查询参数（一行一个 key=value）</span>
+    <textarea class="field-input" id="play-params" rows="4" placeholder="type=json&#10;text=hello"></textarea>
+  </label>
+</div>
+<div class="split-actions" style="margin:0.75rem 0">
+  <button type="button" class="btn btn-filled" onclick="runPlay()">{icon}发送请求</button>
+  <span class="stat-note">将自动附带 appid={uid}&amp;appkey=***</span>
+</div>
+<pre class="play-out" id="play-out">响应会显示在这里</pre>
+<script>
+window.__PLAY_BASE = {base};
+window.__PLAY_APPID = {uid};
+window.__PLAY_APPKEY = {key};
+</script>"#,
+        options = options,
+        icon = ui::icon("play_arrow"),
+        uid = user.uid,
+        base = serde_json::to_string(base.trim_end_matches('/')).unwrap_or_else(|_| "\"\"".into()),
+        key = serde_json::to_string(&user.appkey).unwrap_or_else(|_| "\"\"".into()),
+    );
+    ui::section_card("在线调试", "", &inner)
+}
+
+fn methods_chart(methods: &[RankRow]) -> String {
+    let labels: Vec<String> = methods.iter().map(|m| m.key.clone()).collect();
+    let data: Vec<i64> = methods.iter().map(|m| m.count).collect();
+    let labels_json = serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into());
+    let data_json = serde_json::to_string(&data).unwrap_or_else(|_| "[]".into());
+    let canvas = format!(
+        r#"<div class="chart-box chart-box-sm"><canvas id="method-chart"></canvas></div>
+<script>
+(() => {{
+  const el = document.getElementById('method-chart');
+  if (!el || !window.Chart) return;
+  const labels = {labels};
+  const data = {data};
+  if (!labels.length) return;
+  new Chart(el, {{
+    type: 'doughnut',
+    data: {{
+      labels,
+      datasets: [{{
+        data,
+        backgroundColor: ['#006A6A','#4A6362','#4B607C','#9CF1F0','#D3E4FF','#CCE8E7'],
+        borderWidth: 0
+      }}]
+    }},
+    options: {{
+      plugins: {{ legend: {{ position: 'bottom', labels: {{ boxWidth: 12, font: {{ family: 'Figtree' }} }} }} }},
+      cutout: '62%',
+      animation: {{ duration: 650 }}
+    }}
+  }});
+}})();
+</script>"#,
+        labels = labels_json,
+        data = data_json,
+    );
+    ui::section_card("请求方法占比（本周）", "", &canvas)
+}
+
+fn hourly_chart(hourly: &[i64]) -> String {
+    let labels: Vec<String> = (0..24).map(|h| format!("{h:02}")).collect();
+    let labels_json = serde_json::to_string(&labels).unwrap_or_else(|_| "[]".into());
+    let data_json = serde_json::to_string(hourly).unwrap_or_else(|_| "[]".into());
+    let canvas = format!(
+        r#"<div class="chart-box chart-box-sm"><canvas id="hourly-chart"></canvas></div>
+<script>
+(() => {{
+  const el = document.getElementById('hourly-chart');
+  if (!el || !window.Chart) return;
+  new Chart(el, {{
+    type: 'bar',
+    data: {{
+      labels: {labels},
+      datasets: [{{
+        data: {data},
+        backgroundColor: 'rgba(0,106,106,0.55)',
+        borderRadius: 6,
+        maxBarThickness: 14
+      }}]
+    }},
+    options: {{
+      plugins: {{ legend: {{ display: false }} }},
+      scales: {{
+        x: {{ grid: {{ display: false }}, ticks: {{ maxRotation: 0, autoSkip: true, maxTicksLimit: 12, color: '#3F4948' }} }},
+        y: {{ beginAtZero: true, grid: {{ color: 'rgba(190,201,200,0.4)' }}, ticks: {{ precision: 0 }} }}
+      }},
+      animation: {{ duration: 650 }}
+    }}
+  }});
+}})();
+</script>"#,
+        labels = labels_json,
+        data = data_json,
+    );
+    ui::section_card("今日分时调用", "", &canvas)
+}
+
+fn request_table_full(rows: &[MySqlRow]) -> String {
+    let export = serde_json::to_string(
+        &rows
+            .iter()
+            .map(request_row_json)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap_or_else(|_| "[]".into());
+    let trs = rows
+        .iter()
+        .map(|row| {
+            let ip = get_string(row, "IP").unwrap_or_default();
+            let code = get_i64(row, "Code").unwrap_or(0);
+            let badge = if code == 1 {
+                r#"<span class="chip chip-warn">拦截</span>"#
+            } else {
+                r#"<span class="chip chip-good">正常</span>"#
+            };
+            format!(
+                r#"<tr data-row="{kw} {ip} {ua}">
+  <td>{ts}</td>
+  <td><a href="/index/index/page?api={kwenc}">{kw}</a></td>
+  <td><a href="javascript:void(0)" onclick="lookupIp('{ip}')">{ip}</a></td>
+  <td>{method}</td>
+  <td>{badge}</td>
+  <td class="ua-cell">{ua}</td>
+</tr>"#,
+                ts = ui::html_escape(&format_ts(get_i64(row, "TIME").unwrap_or_default())),
+                kw = ui::html_escape(&get_string(row, "Keyword").unwrap_or_default()),
+                kwenc = urlencoding::encode(&get_string(row, "Keyword").unwrap_or_default()),
+                ip = ui::html_escape(&ip),
+                method = ui::html_escape(&get_string(row, "Request").unwrap_or_default()),
+                badge = badge,
+                ua = ui::html_escape(&get_string(row, "UserAgent").unwrap_or_default()),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!(
+        r#"<script>window.__LOG_EXPORT = {export};</script>
+{table}"#,
+        export = export,
+        table = ui::data_table(
+            &["时间", "接口", "IP", "方式", "状态", "UserAgent"],
+            &trs,
+        ),
+    )
+}
+
+const DASH_SCRIPT: &str = r#"
+<script>
+function filterApis(){
+  const q=(document.getElementById('api-search')?.value||'').toLowerCase();
+  let n=0;
+  document.querySelectorAll('#api-grid .api-card').forEach(el=>{
+    const hit=!q || (el.dataset.name||'').toLowerCase().includes(q) || (el.dataset.kw||'').toLowerCase().includes(q);
+    el.style.display=hit?'':'none';
+    if(hit) n++;
+  });
+  const c=document.getElementById('api-count'); if(c) c.textContent=n+' 个接口';
+}
+function filterLogs(){
+  const q=(document.getElementById('log-filter')?.value||'').toLowerCase();
+  document.querySelectorAll('tr[data-row]').forEach(tr=>{
+    tr.style.display=!q || (tr.dataset.row||'').toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+function exportLogs(){
+  const blob=new Blob([JSON.stringify(window.__LOG_EXPORT||[],null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='api-calls.json';
+  a.click();
+}
+async function lookupIp(ip){
+  try{
+    const r=await fetch('/index/index/ip?address='+encodeURIComponent(ip));
+    const d=await r.json();
+    alert(JSON.stringify(d,null,2));
+  }catch(e){ alert('查询失败'); }
+}
+async function runPlay(){
+  const api=document.getElementById('play-api')?.value;
+  const method=(document.getElementById('play-method')?.value||'GET').toUpperCase();
+  const raw=document.getElementById('play-params')?.value||'';
+  const out=document.getElementById('play-out');
+  const params=new URLSearchParams();
+  params.set('appid', String(window.__PLAY_APPID||''));
+  params.set('appkey', String(window.__PLAY_APPKEY||''));
+  params.set('type','json');
+  raw.split(/\n/).forEach(line=>{
+    const s=line.trim(); if(!s||s.startsWith('#')) return;
+    const i=s.indexOf('=');
+    if(i<0) params.append(s,''); else params.append(s.slice(0,i), s.slice(i+1));
+  });
+  const base=(window.__PLAY_BASE||'').replace(/\/$/,'');
+  const url=base+'/api/v2/'+encodeURIComponent(api)+(method==='GET'?('?'+params.toString()):'');
+  out.textContent='请求中…\n'+url;
+  try{
+    const init={method, headers:{}};
+    if(method!=='GET'){
+      init.headers['Content-Type']='application/x-www-form-urlencoded';
+      init.body=params.toString();
+    }
+    const r=await fetch(url, init);
+    const t=await r.text();
+    let pretty=t;
+    try{ pretty=JSON.stringify(JSON.parse(t),null,2);}catch(_){}
+    out.textContent='HTTP '+r.status+'\n\n'+pretty;
+  }catch(e){ out.textContent='请求失败: '+e; }
+}
+</script>
+"#;
+
 
 fn week_chart(stats: &Stats) -> String {
     let labels = serde_json::to_string(&["6天前", "5天前", "4天前", "3天前", "前天", "昨天", "今天"])
